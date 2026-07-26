@@ -587,6 +587,29 @@ async function generateImageOrVideo() {
   setStatus(notes.length ? "Done — " + notes.join("; ") + "." : "Done.", "success");
 }
 
+// AI-generated video clips can come out at a much higher resolution/bitrate
+// than you'd expect for a few seconds of footage (e.g. 2560x1440 HEVC at
+// ~17 Mbps), which blows past the inline request-size limit long before any
+// duration limit does. Rather than making the user manually re-encode
+// footage before every lip-sync attempt, re-encode it down client-side.
+async function compressVideoForLipsync(file, onProgress) {
+  const { ffmpeg, fetchFile } = await loadFFmpeg(onProgress);
+  await ffmpeg.writeFile("in_video", await fetchFile(file));
+  await ffmpeg.exec([
+    "-i", "in_video",
+    "-vf", "scale='min(640,iw)':-2",
+    "-c:v", "libx264",
+    "-preset", "veryfast",
+    "-crf", "28",
+    "-c:a", "aac",
+    "-b:a", "96k",
+    "-movflags", "+faststart",
+    "out.mp4",
+  ]);
+  const data = await ffmpeg.readFile("out.mp4");
+  return readFileAsDataURL(new Blob([data.buffer], { type: "video/mp4" }));
+}
+
 async function generateLipsync() {
   const videoFile = els.lipsyncVideo.files[0];
   const audioFile = els.lipsyncAudio.files[0];
@@ -596,11 +619,23 @@ async function generateLipsync() {
     return;
   }
 
-  const videoDataUrl = await readFileAsDataURL(videoFile);
+  let videoDataUrl;
+  try {
+    videoDataUrl = await readFileAsDataURL(videoFile);
+    // Only pay the compression cost when the raw file actually needs it.
+    if (estimateDataUrlBytes(videoDataUrl) > 2 * 1024 * 1024) {
+      setStatus("Compressing video — this clip is larger than expected…");
+      videoDataUrl = await compressVideoForLipsync(videoFile, (p) => setStatus(`Compressing video… ${Math.round(p * 100)}%`));
+    }
+  } catch (err) {
+    setStatus("Couldn't process the video file (" + (err.message || "unknown error") + ").", "error");
+    return;
+  }
+
   const audioDataUrl = await readFileAsDataURL(audioFile);
 
   if (estimateDataUrlBytes(videoDataUrl) + estimateDataUrlBytes(audioDataUrl) > MAX_INLINE_BYTES) {
-    setStatus("Those files are too large for this app's free hosting tier — try a shorter clip (a few seconds).", "error");
+    setStatus("Even after compression, those files are too large for this app's free hosting tier — try a shorter clip (a few seconds).", "error");
     return;
   }
 
