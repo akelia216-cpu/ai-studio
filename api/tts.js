@@ -33,10 +33,28 @@ module.exports = async function handler(req, res) {
   try {
     const schema = await getInputSchema(token, TTS_MODEL);
     const textField = firstSupportedField(schema, ["text"]) || "text";
-    const voiceField = firstSupportedField(schema, ["voice_id", "voice"]);
+    // Verified against fal's own docs: this model's voice selector is NOT a
+    // flat "voice_id" field — it's nested under "voice_setting.voice_id".
+    // fal also doesn't publish an enum of valid voice IDs for this field,
+    // which is why /api/voices can't offer a dropdown; the user types one in.
+    const hasVoiceSetting = !!(schema.properties && Object.prototype.hasOwnProperty.call(schema.properties, "voice_setting"));
+    const flatVoiceField = firstSupportedField(schema, ["voice_id", "voice"]);
+    // fal defaults to hex-encoded audio bytes (no playable URL) unless asked
+    // for one explicitly — without this, the app would have nothing to point
+    // an <audio>/<video> tag at even on a fully successful generation.
+    const outputFormatField = firstSupportedField(schema, ["output_format"]);
 
     const input = { [textField]: text.trim() };
-    if (voiceField && voiceId) input[voiceField] = voiceId;
+    if (outputFormatField) input[outputFormatField] = "url";
+    if (voiceId) {
+      if (hasVoiceSetting || (!flatVoiceField && schema.unavailable)) {
+        input.voice_setting = { voice_id: voiceId };
+      } else if (flatVoiceField) {
+        input[flatVoiceField] = voiceId;
+      } else {
+        input.voice_setting = { voice_id: voiceId };
+      }
+    }
 
     const { ok, status, data } = await createPrediction(token, TTS_MODEL, input);
     if (!ok) {
