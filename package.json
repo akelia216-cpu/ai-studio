@@ -1,0 +1,9 @@
+{
+  "name": "ai-studio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Personal AI image & video generator, powered by Replicate.",
+  "scripts": {
+    "dev": "vercel dev"
+  }
+}
