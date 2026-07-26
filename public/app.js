@@ -30,6 +30,7 @@ const els = {
   kidsStoryControls: document.getElementById("kidsStoryControls"),
   kidsSongControls: document.getElementById("kidsSongControls"),
   kidsCartoonControls: document.getElementById("kidsCartoonControls"),
+  kidsScript: document.getElementById("kidsScript"),
   kidVoice: document.getElementById("kidVoice"),
   adultVoice: document.getElementById("adultVoice"),
   kidVoiceManual: document.getElementById("kidVoiceManual"),
@@ -1286,6 +1287,7 @@ els.generateBtn.addEventListener("click", async () => {
     else if (isStoryboard()) await generateStoryboard();
     else await generateImageOrVideo();
   } catch (err) {
+    console.error(err); // full details in the browser console for debugging
     setStatus(err.message || "Network error.", "error");
   } finally {
     els.generateBtn.disabled = false;
