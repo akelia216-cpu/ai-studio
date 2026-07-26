@@ -81,5 +81,5 @@ module.exports = async function handler(req, res) {
     res.status(200).json({ id: data.id, status: data.status, output: data.output || null });
   } catch (err) {
     res.status(500).json({ error: err.message || "Unexpected server error." });
-  }
+  }module.exports = { getInputSchema, firstSupportedField, createPrediction, getPrediction };
 };
