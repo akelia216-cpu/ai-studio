@@ -221,7 +221,7 @@ async function getPrediction(token, compositeId) {
     authoritativeUrl: responseUrl,
     endpointId,
     requestId,
-    suffix: "",
+    suffix: "/response",
   });
   if (!resultRes.ok) {
     return {
