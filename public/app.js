@@ -379,9 +379,13 @@ function estimateDataUrlBytes(dataUrl) {
 // ---------- Polling ----------
 
 async function pollPrediction(id, onDone) {
-  const maxAttempts = 120; // ~6 minutes at 3s intervals
+  // Video models can legitimately take several minutes, especially under
+  // load — fal's own queue can hold a job for up to an hour server-side.
+  // ~15 minutes at 4s intervals gives real video generations room to finish
+  // instead of the app giving up while fal is still quietly working on it.
+  const maxAttempts = 225;
   for (let i = 0; i < maxAttempts; i++) {
-    await new Promise((r) => setTimeout(r, 3000));
+    await new Promise((r) => setTimeout(r, 4000));
     let res, data;
     try {
       res = await fetch(`/api/status?id=${encodeURIComponent(id)}`);
