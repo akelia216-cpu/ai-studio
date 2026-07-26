@@ -900,8 +900,10 @@ async function generateKidsStory() {
     return;
   }
 
-  const kidVoiceId = els.kidVoice.value;
-  const adultVoiceId = els.adultVoice.value;
+  // Use the typed-in voice ID when the dropdown is hidden (fal published no
+  // enum for this model), otherwise use whichever dropdown option is picked.
+  const kidVoiceId = els.kidVoiceManual.classList.contains("hidden") ? els.kidVoice.value : els.kidVoiceManual.value.trim();
+  const adultVoiceId = els.adultVoiceManual.classList.contains("hidden") ? els.adultVoice.value : els.adultVoiceManual.value.trim();
 
   els.kidsProgress.classList.remove("hidden");
   const statuses = lines.map(() => "waiting");
