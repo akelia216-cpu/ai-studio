@@ -157,4 +157,108 @@ function extractOutput(resultData) {
   if (resultData.images && resultData.images[0] && resultData.images[0].url) return resultData.images[0].url;
   if (resultData.image && resultData.image.url) return resultData.image.url;
   if (resultData.video && resultData.video.url) return resultData.video.url;
-  if (resultData.audio &&
+  if (resultData.audio && resultData.audio.url) return resultData.audio.url;
+  if (resultData.audio_file && resultData.audio_file.url) return resultData.audio_file.url;
+  if (resultData.output && resultData.output.url) return resultData.output.url;
+  if (typeof resultData.output === "string") return resultData.output;
+  return null;
+}
+
+// GETs a queue URL, trying (in order): the exact URL fal gave us at submit
+// time (most reliable — this is what fal's own docs/SDKs treat as
+// authoritative), then the constructed full-endpoint-id URL, then the
+// trimmed base-app-id URL. Stops at the first response that isn't a 404.
+async function queueGet(token, { authoritativeUrl, endpointId, requestId, suffix }) {
+  const attempt = async (url) => {
+    const res = await fetch(url, { headers: { Authorization: `Key ${token}` } });
+    const data = await safeReadJson(res);
+    return { res, data };
+  };
+
+  const candidates = [];
+  if (authoritativeUrl) candidates.push(authoritativeUrl);
+  candidates.push(`https://queue.fal.run/${endpointId}/requests/${requestId}${suffix}`);
+  const base = baseAppId(endpointId);
+  if (base && base !== endpointId) candidates.push(`https://queue.fal.run/${base}/requests/${requestId}${suffix}`);
+
+  let last = null;
+  for (const url of candidates) {
+    last = await attempt(url);
+    if (last.res.status !== 404) return last;
+  }
+  return last;
+}
+
+async function getPrediction(token, compositeId) {
+  const { endpointId, requestId, statusUrl, responseUrl } = splitCompositeId(compositeId);
+  if (!endpointId || !requestId) {
+    return { ok: false, status: 400, data: { detail: "Malformed prediction id — missing endpoint or request id." } };
+  }
+
+  const { res: statusRes, data: statusData } = await queueGet(token, {
+    authoritativeUrl: statusUrl,
+    endpointId,
+    requestId,
+    suffix: "/status",
+  });
+  if (!statusRes.ok) {
+    return {
+      ok: false,
+      status: statusRes.status,
+      data: { detail: stringifyError(statusData.detail) || stringifyError(statusData.message) || describeUnparsed(statusData) || `Status check failed (${statusRes.status}).` },
+    };
+  }
+
+  const mapped = STATUS_MAP[statusData.status] || statusData.status;
+  if (mapped !== "succeeded") {
+    if (mapped === "failed" || statusData.status === "FAILED") {
+      return { ok: true, status: 200, data: { status: "failed", error: stringifyError(statusData.error) || "Generation failed." } };
+    }
+    return { ok: true, status: 200, data: { status: mapped || "processing", output: null } };
+  }
+
+  const { res: resultRes, data: resultData } = await queueGet(token, {
+    authoritativeUrl: responseUrl,
+    endpointId,
+    requestId,
+    suffix: "",
+  });
+  if (!resultRes.ok) {
+    return {
+      ok: false,
+      status: resultRes.status,
+      data: { detail: stringifyError(resultData.detail) || stringifyError(resultData.message) || describeUnparsed(resultData) || `Result fetch failed (${resultRes.status}).` },
+    };
+  }
+
+  return { ok: true, status: 200, data: { status: "succeeded", output: extractOutput(resultData) } };
+}
+
+function describeUnparsed(data) {
+  if (data.__empty) return "The provider returned an empty response.";
+  if (data.__unparsed) return `The provider returned an unexpected response: ${data.__raw}`;
+  return null;
+}
+
+// fal doesn't always send error details as a plain string — sometimes it's
+// an object (e.g. { message, type, ... } or a validation-error array).
+// Whatever shape it is, this always returns something readable rather than
+// letting "[object Object]" leak through to the UI.
+function stringifyError(err) {
+  if (!err) return null;
+  if (typeof err === "string") return err;
+  if (Array.isArray(err)) return err.map(stringifyError).filter(Boolean).join("; ");
+  if (typeof err === "object") {
+    if (typeof err.message === "string") return err.message;
+    if (typeof err.detail === "string") return err.detail;
+    if (typeof err.msg === "string") return err.msg;
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return String(err);
+    }
+  }
+  return String(err);
+}
+
+module.exports = { getInputSchema, firstSupportedField, createPrediction, getPrediction };
