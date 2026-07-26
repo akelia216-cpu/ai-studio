@@ -152,7 +152,17 @@ async function ensureVoicesLoaded() {
     const res = await fetch("/api/voices");
     const data = await res.json();
     if (!data.available) {
-      els.voiceListHint.textContent = data.note || "Couldn't load a voice list for this model.";
+      // fal doesn't publish an enum of valid voice IDs for this model — fall
+      // back to letting the user type one in directly (find real voice
+      // names on the model's fal.ai page) instead of leaving them stuck with
+      // an empty, unusable dropdown.
+      els.kidVoice.classList.add("hidden");
+      els.adultVoice.classList.add("hidden");
+      els.kidVoiceManual.classList.remove("hidden");
+      els.adultVoiceManual.classList.remove("hidden");
+      els.voiceListHint.textContent =
+        data.note ||
+        "This model doesn't publish a fixed voice list. Type a voice ID above, or leave Adult blank to use the default voice.";
       return;
     }
     const fill = (select, list, placeholder) => {
