@@ -738,9 +738,19 @@ async function loadFFmpeg(onProgress) {
   if (onProgress) ffmpeg.on("progress", ({ progress }) => onProgress(progress));
 
   const base = "https://esm.sh/@ffmpeg/core@0.12.6/dist/esm";
+  // ffmpeg.wasm spawns its own worker (default "./worker.js", resolved against
+  // esm.sh's module URL) to actually run ffmpeg — since that resolves to a
+  // different origin than this app, browsers refuse to construct that Worker
+  // at all ("cannot be accessed from origin ..."). Blob-ifying it, exactly
+  // like coreURL/wasmURL already are, makes it same-origin. esm.sh
+  // content-hashes its internal file paths (so the worker isn't at a stable
+  // URL there); unpkg serves the package's raw files unchanged, so pull the
+  // worker script from there instead.
+  const workerBase = "https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/esm";
   await ffmpeg.load({
     coreURL: await toBlobURL(`${base}/ffmpeg-core.js`, "text/javascript"),
     wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`, "application/wasm"),
+    classWorkerURL: await toBlobURL(`${workerBase}/worker.js`, "text/javascript"),
   });
 
   return { ffmpeg, fetchFile };
