@@ -94,6 +94,12 @@ function baseAppId(endpointId) {
 // Submits a request to fal's queue. Unlike Replicate, this never returns the
 // finished result inline — callers always poll afterwards, which is already
 // how every part of this app is written.
+//
+// fal's submit response includes the exact status_url/response_url to poll
+// (this is the authoritative source — trust it over guessing a URL shape
+// from the endpoint id, since fal's queue URL structure isn't identical
+// across every model family). Those get encoded into the id we hand back to
+// the client so a later, separate /api/status request can use them too.
 async function createPrediction(token, endpointId, input) {
   const res = await fetch(`https://queue.fal.run/${endpointId}`, {
     method: "POST",
@@ -114,18 +120,33 @@ async function createPrediction(token, endpointId, input) {
   if (!data.request_id) {
     return { ok: false, status: 502, data: { detail: describeUnparsed(data) || "fal.ai didn't return a request id." } };
   }
-  // Encode which endpoint this request belongs to into the id, since fal's
-  // status/result URLs need both the endpoint id and the request id, and a
-  // later /api/status call is a separate HTTP request with no memory of
-  // which endpoint created it.
-  const compositeId = `${endpointId}::${data.request_id}`;
+  const compositeId = encodeCompositeId({
+    endpointId,
+    requestId: data.request_id,
+    statusUrl: data.status_url || null,
+    responseUrl: data.response_url || null,
+  });
   return { ok: true, status: res.status, data: { id: compositeId, status: "starting", output: null } };
 }
 
+// The composite id is base64url-encoded JSON so it survives being passed
+// around as a plain query-string value (e.g. /api/status?id=...) without
+// needing extra escaping, and so it can carry more than just two fields.
+function encodeCompositeId(obj) {
+  return Buffer.from(JSON.stringify(obj)).toString("base64url");
+}
+
 function splitCompositeId(id) {
+  try {
+    const decoded = JSON.parse(Buffer.from(id, "base64url").toString("utf8"));
+    if (decoded && decoded.endpointId && decoded.requestId) return decoded;
+  } catch {
+    // fall through to the legacy "endpointId::requestId" format below, in
+    // case an older id (from before this encoding) is still being polled.
+  }
   const sep = id.indexOf("::");
   if (sep === -1) return { endpointId: null, requestId: id };
-  return { endpointId: id.slice(0, sep), requestId: id.slice(sep + 2) };
+  return { endpointId: id.slice(0, sep), requestId: id.slice(sep + 2), statusUrl: null, responseUrl: null };
 }
 
 const STATUS_MAP = { COMPLETED: "succeeded", IN_PROGRESS: "processing", IN_QUEUE: "starting" };
@@ -136,74 +157,4 @@ function extractOutput(resultData) {
   if (resultData.images && resultData.images[0] && resultData.images[0].url) return resultData.images[0].url;
   if (resultData.image && resultData.image.url) return resultData.image.url;
   if (resultData.video && resultData.video.url) return resultData.video.url;
-  if (resultData.audio && resultData.audio.url) return resultData.audio.url;
-  if (resultData.audio_file && resultData.audio_file.url) return resultData.audio_file.url;
-  if (resultData.output && resultData.output.url) return resultData.output.url;
-  if (typeof resultData.output === "string") return resultData.output;
-  return null;
-}
-
-// Tries a queue GET under `endpointId` first; if that 404s and a trimmed
-// base app id is available, retries under that instead. Returns whichever
-// attempt succeeded (or the last failure if neither did).
-async function queueGet(token, endpointId, requestId, suffix) {
-  const attempt = async (base) => {
-    const res = await fetch(`https://queue.fal.run/${base}/requests/${requestId}${suffix}`, {
-      headers: { Authorization: `Key ${token}` },
-    });
-    const data = await safeReadJson(res);
-    return { res, data };
-  };
-
-  let { res, data } = await attempt(endpointId);
-  if (res.status === 404) {
-    const base = baseAppId(endpointId);
-    if (base && base !== endpointId) {
-      ({ res, data } = await attempt(base));
-    }
-  }
-  return { res, data };
-}
-
-async function getPrediction(token, compositeId) {
-  const { endpointId, requestId } = splitCompositeId(compositeId);
-  if (!endpointId) {
-    return { ok: false, status: 400, data: { detail: "Malformed prediction id — missing endpoint." } };
-  }
-
-  const { res: statusRes, data: statusData } = await queueGet(token, endpointId, requestId, "/status");
-  if (!statusRes.ok) {
-    return {
-      ok: false,
-      status: statusRes.status,
-      data: { detail: statusData.detail || statusData.message || describeUnparsed(statusData) || `Status check failed (${statusRes.status}).` },
-    };
-  }
-
-  const mapped = STATUS_MAP[statusData.status] || statusData.status;
-  if (mapped !== "succeeded") {
-    if (mapped === "failed" || statusData.status === "FAILED") {
-      return { ok: true, status: 200, data: { status: "failed", error: statusData.error || "Generation failed." } };
-    }
-    return { ok: true, status: 200, data: { status: mapped || "processing", output: null } };
-  }
-
-  const { res: resultRes, data: resultData } = await queueGet(token, endpointId, requestId, "");
-  if (!resultRes.ok) {
-    return {
-      ok: false,
-      status: resultRes.status,
-      data: { detail: resultData.detail || resultData.message || describeUnparsed(resultData) || `Result fetch failed (${resultRes.status}).` },
-    };
-  }
-
-  return { ok: true, status: 200, data: { status: "succeeded", output: extractOutput(resultData) } };
-}
-
-function describeUnparsed(data) {
-  if (data.__empty) return "The provider returned an empty response.";
-  if (data.__unparsed) return `The provider returned an unexpected response: ${data.__raw}`;
-  return null;
-}
-
-module.exports = { getInputSchema, firstSupportedField, createPrediction, getPrediction };
+  if (resultData.audio &&
