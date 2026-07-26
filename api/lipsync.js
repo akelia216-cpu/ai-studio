@@ -34,8 +34,14 @@ module.exports = async function handler(req, res) {
 
   try {
     const schema = await getInputSchema(token, LIPSYNC_MODEL);
-    const videoField = firstSupportedField(schema, ["video"]) || "video";
-    const audioField = firstSupportedField(schema, ["audio"]) || "audio";
+    // Verified against fal's own docs (fal.ai/models/fal-ai/latentsync/api):
+    // required fields are "video_url" and "audio_url" (both strings — fal
+    // accepts base64 data URIs directly here, no separate upload step
+    // needed). Optional: "guidance_scale" (float, default 1) and
+    // "seed" (int). We prefer the "_url" names and only fall back to the
+    // bare names if a future schema change actually removes them.
+    const videoField = firstSupportedField(schema, ["video_url", "video"]) || "video_url";
+    const audioField = firstSupportedField(schema, ["audio_url", "audio"]) || "audio_url";
     const guidanceField = firstSupportedField(schema, ["guidance_scale"]);
     const stepsField = firstSupportedField(schema, ["inference_steps"]);
 
