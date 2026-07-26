@@ -249,6 +249,14 @@ function stringifyError(err) {
   if (typeof err === "string") return err;
   if (Array.isArray(err)) return err.map(stringifyError).filter(Boolean).join("; ");
   if (typeof err === "object") {
+    // FastAPI/Pydantic-style validation errors (which is what fal's queue
+    // API returns) look like { loc: ["body", "image_url"], msg: "Field
+    // required", type: "missing" } — surface *which* field, not just "Field
+    // required" with no way to tell what's missing.
+    if (Array.isArray(err.loc) && typeof err.msg === "string") {
+      const field = err.loc.filter((p) => p !== "body").join(".");
+      return field ? `${field}: ${err.msg}` : err.msg;
+    }
     if (typeof err.message === "string") return err.message;
     if (typeof err.detail === "string") return err.detail;
     if (typeof err.msg === "string") return err.msg;
