@@ -39,7 +39,8 @@ async function getInputSchema(token, endpointId) {
     const url = `https://fal.ai/api/openapi/queue/openapi.json?endpoint_id=${encodeURIComponent(endpointId)}`;
     const res = await fetch(url, { headers: { Authorization: `Key ${token}` } });
     if (!res.ok) throw new Error(`schema fetch ${res.status}`);
-    const doc = await res.json();
+    const doc = await safeReadJson(res);
+    if (doc.__empty || doc.__unparsed) throw new Error("schema response was not valid JSON");
     const { properties, required } = extractInputSchema(doc);
     const entry = { properties, required, fetchedAt: Date.now() };
     schemaCache.set(endpointId, entry);
@@ -62,6 +63,34 @@ function firstSupportedField(schema, candidates) {
   return null;
 }
 
+// Reads a response body defensively — fal occasionally returns an empty or
+// non-JSON body (e.g. on a 404 for a mistaken URL, or a gateway hiccup), and
+// calling .json() directly on that throws "Unexpected end of JSON input",
+// which is confusing to surface to a user as-is. This always returns a
+// plain object with a readable message instead of throwing.
+async function safeReadJson(res) {
+  const text = await res.text();
+  if (!text) return { __empty: true };
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { __unparsed: true, __raw: text.slice(0, 300) };
+  }
+}
+
+// fal's queue system tracks a request under the *app*, which for most
+// models is just the first two path segments (e.g. "fal-ai/flux"), not the
+// full endpoint id used for submission (e.g. "fal-ai/flux/schnell" or
+// "fal-ai/kling-video/v1.6/standard/text-to-video"). Some models submit and
+// poll under the exact same path; others only accept the trimmed base for
+// status/result. Since this can't be confirmed per-model in advance, try
+// the full endpoint id first and fall back to the trimmed base on a 404.
+function baseAppId(endpointId) {
+  const parts = endpointId.split("/");
+  if (parts.length <= 2) return null;
+  return parts.slice(0, 2).join("/");
+}
+
 // Submits a request to fal's queue. Unlike Replicate, this never returns the
 // finished result inline — callers always poll afterwards, which is already
 // how every part of this app is written.
@@ -74,9 +103,16 @@ async function createPrediction(token, endpointId, input) {
     },
     body: JSON.stringify(input),
   });
-  const data = await res.json();
+  const data = await safeReadJson(res);
   if (!res.ok) {
-    return { ok: false, status: res.status, data };
+    return {
+      ok: false,
+      status: res.status,
+      data: { detail: data.detail || data.message || describeUnparsed(data) || `Request was rejected (${res.status}).` },
+    };
+  }
+  if (!data.request_id) {
+    return { ok: false, status: 502, data: { detail: describeUnparsed(data) || "fal.ai didn't return a request id." } };
   }
   // Encode which endpoint this request belongs to into the id, since fal's
   // status/result URLs need both the endpoint id and the request id, and a
@@ -107,33 +143,67 @@ function extractOutput(resultData) {
   return null;
 }
 
+// Tries a queue GET under `endpointId` first; if that 404s and a trimmed
+// base app id is available, retries under that instead. Returns whichever
+// attempt succeeded (or the last failure if neither did).
+async function queueGet(token, endpointId, requestId, suffix) {
+  const attempt = async (base) => {
+    const res = await fetch(`https://queue.fal.run/${base}/requests/${requestId}${suffix}`, {
+      headers: { Authorization: `Key ${token}` },
+    });
+    const data = await safeReadJson(res);
+    return { res, data };
+  };
+
+  let { res, data } = await attempt(endpointId);
+  if (res.status === 404) {
+    const base = baseAppId(endpointId);
+    if (base && base !== endpointId) {
+      ({ res, data } = await attempt(base));
+    }
+  }
+  return { res, data };
+}
+
 async function getPrediction(token, compositeId) {
   const { endpointId, requestId } = splitCompositeId(compositeId);
   if (!endpointId) {
     return { ok: false, status: 400, data: { detail: "Malformed prediction id — missing endpoint." } };
   }
 
-  const statusRes = await fetch(`https://queue.fal.run/${endpointId}/requests/${requestId}/status`, {
-    headers: { Authorization: `Key ${token}` },
-  });
-  const statusData = await statusRes.json();
-  if (!statusRes.ok) return { ok: false, status: statusRes.status, data: statusData };
+  const { res: statusRes, data: statusData } = await queueGet(token, endpointId, requestId, "/status");
+  if (!statusRes.ok) {
+    return {
+      ok: false,
+      status: statusRes.status,
+      data: { detail: statusData.detail || statusData.message || describeUnparsed(statusData) || `Status check failed (${statusRes.status}).` },
+    };
+  }
 
   const mapped = STATUS_MAP[statusData.status] || statusData.status;
   if (mapped !== "succeeded") {
     if (mapped === "failed" || statusData.status === "FAILED") {
       return { ok: true, status: 200, data: { status: "failed", error: statusData.error || "Generation failed." } };
     }
-    return { ok: true, status: 200, data: { status: mapped, output: null } };
+    return { ok: true, status: 200, data: { status: mapped || "processing", output: null } };
   }
 
-  const resultRes = await fetch(`https://queue.fal.run/${endpointId}/requests/${requestId}`, {
-    headers: { Authorization: `Key ${token}` },
-  });
-  const resultData = await resultRes.json();
-  if (!resultRes.ok) return { ok: false, status: resultRes.status, data: resultData };
+  const { res: resultRes, data: resultData } = await queueGet(token, endpointId, requestId, "");
+  if (!resultRes.ok) {
+    return {
+      ok: false,
+      status: resultRes.status,
+      data: { detail: resultData.detail || resultData.message || describeUnparsed(resultData) || `Result fetch failed (${resultRes.status}).` },
+    };
+  }
 
   return { ok: true, status: 200, data: { status: "succeeded", output: extractOutput(resultData) } };
+}
+
+function describeUnparsed(data) {
+  if (data.__empty) return "The provider returned an empty response.";
+  if (data.__unparsed) return `The provider returned an unexpected response: ${data.__raw}`;
+  return null;
 }
 
 module.exports = { getInputSchema, firstSupportedField, createPrediction, getPrediction };
