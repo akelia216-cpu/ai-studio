@@ -208,14 +208,34 @@
               <span class="hint">Don't love it? Tweak the description and regenerate — this image is reused in every scene so it's worth getting right first.</span>
             </div>
 
-            <label class="field">
-              <span>Lyrics</span>
-              <textarea id="cartoonLyrics" rows="6" placeholder="[Verse]&#10;Let's dance and jump and sing today...&#10;&#10;[Chorus]&#10;Come on everybody, hooray!"></textarea>
-            </label>
-            <label class="field">
-              <span>Style / mood</span>
-              <input type="text" id="cartoonSongStyle" placeholder="cheerful kids sing-along, ukulele and handclaps, bouncy tempo" />
-            </label>
+            <div class="mode-toggle small" role="tablist">
+              <button class="cartoon-content-btn active" data-cartooncontent="song" type="button">Song</button>
+              <button class="cartoon-content-btn" data-cartooncontent="narration" type="button">Narration (spoken)</button>
+            </div>
+
+            <div id="cartoonSongFields">
+              <label class="field">
+                <span>Lyrics</span>
+                <textarea id="cartoonLyrics" rows="6" placeholder="[Verse]&#10;Let's dance and jump and sing today...&#10;&#10;[Chorus]&#10;Come on everybody, hooray!"></textarea>
+              </label>
+              <label class="field">
+                <span>Style / mood</span>
+                <input type="text" id="cartoonSongStyle" placeholder="cheerful kids sing-along, ukulele and handclaps, bouncy tempo" />
+              </label>
+            </div>
+
+            <div id="cartoonNarrationFields" class="hidden">
+              <label class="field">
+                <span>Script</span>
+                <textarea id="cartoonScript" rows="6" placeholder="Hi friends, it's me, Pip! Tonight the sky is full of stars, and I want to show you something amazing..."></textarea>
+                <span class="hint">Written exactly as Pip should say it — this gets split across scenes automatically, no "Kid:"/"Adult:" labels needed here.</span>
+              </label>
+              <label class="field">
+                <span>Pip's voice</span>
+                <select id="cartoonVoice"></select>
+                <input type="text" id="cartoonVoiceManual" class="hidden" placeholder="e.g. cute_boy" />
+              </label>
+            </div>
 
             <div class="two-col">
               <label class="field">
@@ -247,7 +267,7 @@
                 <option value="90">90 seconds</option>
                 <option value="120">2 minutes</option>
               </select>
-              <span class="hint">Builds ~1 scene per 5 seconds, animates each with the character, lip-syncs each to its slice of the song, then stitches it all into one video. Expect several minutes and roughly (scene count) × (video + lip-sync cost) — start with 30s the first time.</span>
+              <span class="hint">Builds ~1 scene per 5 seconds, animates each with the character, lip-syncs each scene to its own audio, then stitches it all into one video. Expect several minutes and roughly (scene count) × (video + lip-sync cost) — start with 30s the first time.</span>
             </label>
           </div>
 
