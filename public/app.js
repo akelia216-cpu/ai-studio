@@ -65,6 +65,7 @@ const els = {
   cartoonBackgroundDescription: document.getElementById("cartoonBackgroundDescription"),
   dialogueVoiceSourceBtns: document.querySelectorAll(".dialogue-voice-source-btn"),
   dialogueScript: document.getElementById("dialogueScript"),
+  dialogueBothImage: document.getElementById("dialogueBothImage"),
   dialogueChar1Name: document.getElementById("dialogueChar1Name"),
   dialogueChar1ImgDefault: document.getElementById("dialogueChar1ImgDefault"),
   dialogueChar1ExtraExpressions: document.getElementById("dialogueChar1ExtraExpressions"),
@@ -1733,11 +1734,14 @@ function buildNarrationScenePrompt(sceneIndex) {
 // caller's chosen visual style instead of a hardcoded one. Used by both the
 // Narration and Dialogue pipelines. Can also auto-pick which of a
 // character's uploaded expressions best fits an untagged line
-// (availableExpressions), and can write a silent, non-verbal beat instead of
-// a spoken one (nonVerbal). Falls back to the caller's static prompt (e.g.
-// buildNarrationScenePrompt/buildDialogueScenePrompt) if the LLM call fails,
-// so a hiccup here never blocks the whole video. Always returns
-// { prompt, matchedExpression }.
+// (availableExpressions), can write a silent, non-verbal beat instead of a
+// spoken one (nonVerbal), and picks a camera movement per scene — favoring a
+// zoom-out/dolly-out reveal specifically for "both characters together"
+// scenes (bothScene), since only those start from a reference image that
+// already has both characters in it. Falls back to the caller's static
+// prompt (e.g. buildNarrationScenePrompt/buildDialogueScenePrompt) and a
+// "none" camera if the LLM call fails, so a hiccup here never blocks the
+// whole video. Always returns { prompt, matchedExpression, cameraMotion }.
 async function buildDynamicScenePrompt(opts) {
   const {
     characterName,
@@ -1748,6 +1752,7 @@ async function buildDynamicScenePrompt(opts) {
     backgroundDescription,
     availableExpressions,
     nonVerbal,
+    bothScene,
     fallback,
   } = opts;
   try {
@@ -1763,13 +1768,14 @@ async function buildDynamicScenePrompt(opts) {
         backgroundDescription,
         availableExpressions,
         nonVerbal,
+        bothScene,
       }),
     });
     const data = await res.json();
-    if (!res.ok || !data.prompt) return { prompt: fallback, matchedExpression: null };
-    return { prompt: data.prompt, matchedExpression: data.matchedExpression || null };
+    if (!res.ok || !data.prompt) return { prompt: fallback, matchedExpression: null, cameraMotion: "none" };
+    return { prompt: data.prompt, matchedExpression: data.matchedExpression || null, cameraMotion: data.cameraMotion || "none" };
   } catch {
-    return { prompt: fallback, matchedExpression: null };
+    return { prompt: fallback, matchedExpression: null, cameraMotion: "none" };
   }
 }
 
@@ -1856,8 +1862,8 @@ async function generateCartoonNarrationVideo() {
     setStatus("Writing each scene…");
     const styleDescription = els.cartoonStyleDescription.value.trim();
     const backgroundDescription = els.cartoonBackgroundDescription.value.trim();
-    const scenePrompts = await runWithConcurrency(chunks, 3, async (text, i) => {
-      const result = await buildDynamicScenePrompt({
+    const sceneResults = await runWithConcurrency(chunks, 3, async (text, i) =>
+      buildDynamicScenePrompt({
         characterName: "Pip",
         characterDescription: "a friendly cartoon fox character",
         lineText: text,
@@ -1865,9 +1871,10 @@ async function generateCartoonNarrationVideo() {
         styleDescription,
         backgroundDescription,
         fallback: buildNarrationScenePrompt(i),
-      });
-      return result.prompt;
-    });
+      })
+    );
+    const scenePrompts = sceneResults.map((r) => r.prompt);
+    const sceneCameraMotions = sceneResults.map((r) => r.cameraMotion);
 
     // 3. Animate the character for each scene.
     const videoStatuses = chunks.map(() => "waiting");
@@ -1888,6 +1895,7 @@ async function generateCartoonNarrationVideo() {
             style: "cartoon",
             startImage: cartoonCharacterUrl,
             actionMotion,
+            cameraMotion: sceneCameraMotions[i],
           }),
         });
         const data = await res.json();
@@ -2190,15 +2198,19 @@ function buildDialogueScenePrompt(characterName, expression) {
 }
 
 // Parses "Name: text" / "Name (expression): text" lines, validating each
-// speaker name against the two configured character names up front so a
-// typo fails fast instead of burning API calls before erroring out midway.
-// A line wrapped in square brackets — "[Name: action]" or "[Name
-// (expression): action]" — is a silent, non-verbal beat: no dialogue, so
-// that scene skips TTS and lip-sync entirely and just plays the animated
-// action (see generateCartoonDialogueVideo). `explicitExpression` records
-// whether the script itself tagged an expression, as opposed to defaulting
-// to "default" — only untagged lines are eligible for automatic
-// expression-matching later.
+// speaker name against the two configured character names (or the reserved
+// word "Both") up front so a typo fails fast instead of burning API calls
+// before erroring out midway. A line wrapped in square brackets — "[Name:
+// action]" or "[Name (expression): action]" — is a silent, non-verbal beat:
+// no dialogue, so that scene skips TTS and lip-sync entirely and just plays
+// the animated action (see generateCartoonDialogueVideo). "Both" is reserved
+// for the two-characters-together reference image: "[Both: action]" is a
+// silent two-character beat, and a normal speaking line can add "both" as an
+// extra tag inside the parentheses — "Pip (both): ..." or "Pip (thinking,
+// both): ..." — to use the together image for that one line while still
+// having just that character speak. `explicitExpression` records whether the
+// script itself tagged an expression, as opposed to defaulting to "default"
+// — only untagged lines are eligible for automatic expression-matching later.
 function parseDialogueScript(script, char1Name, char2Name) {
   const lines = script
     .split("\n")
@@ -2210,14 +2222,21 @@ function parseDialogueScript(script, char1Name, char2Name) {
   nameMap[char1Name.trim().toLowerCase()] = 1;
   nameMap[char2Name.trim().toLowerCase()] = 2;
 
+  const resolveSpeaker = (rawName, lineNo) => {
+    const key = rawName.trim().toLowerCase();
+    if (key === "both") return "both";
+    const charNum = nameMap[key];
+    if (!charNum) {
+      throw new Error(`Line ${lineNo}: "${rawName.trim()}" doesn't match either character's name (${char1Name} or ${char2Name}), or "Both".`);
+    }
+    return charNum;
+  };
+
   return lines.map((line, i) => {
     const silentMatch = line.match(/^\[\s*([^:()\]]+?)(?:\s*\(([^)]+)\))?\s*:\s*([^\]]+?)\s*\]\s*$/);
     if (silentMatch) {
       const [, rawName, rawExpr, action] = silentMatch;
-      const charNum = nameMap[rawName.trim().toLowerCase()];
-      if (!charNum) {
-        throw new Error(`Line ${i + 1}: "${rawName.trim()}" doesn't match either character's name (${char1Name} or ${char2Name}).`);
-      }
+      const charNum = resolveSpeaker(rawName, i + 1);
       return {
         charNum,
         expression: rawExpr ? rawExpr.trim().toLowerCase() : "default",
@@ -2225,6 +2244,7 @@ function parseDialogueScript(script, char1Name, char2Name) {
         text: "",
         action: action.trim(),
         silent: true,
+        bothScene: charNum === "both",
       };
     }
 
@@ -2232,19 +2252,34 @@ function parseDialogueScript(script, char1Name, char2Name) {
     if (!m) {
       throw new Error(`Line ${i + 1} isn't in "Name: text" format (or "[Name: action]" for a silent beat): "${line}"`);
     }
-    const [, rawName, rawExpr, text] = m;
-    const charNum = nameMap[rawName.trim().toLowerCase()];
-    if (!charNum) {
-      throw new Error(`Line ${i + 1}: "${rawName.trim()}" doesn't match either character's name (${char1Name} or ${char2Name}).`);
+    const [, rawName, rawParen, text] = m;
+    const charNum = resolveSpeaker(rawName, i + 1);
+    if (charNum === "both") {
+      throw new Error(
+        `Line ${i + 1}: "Both" can't speak a line — use "[Both: action]" for a silent two-character beat, or tag a speaking ` +
+          `character's line with "(both)" instead, e.g. "${char1Name} (both): ...".`
+      );
     }
-    return {
-      charNum,
-      expression: rawExpr ? rawExpr.trim().toLowerCase() : "default",
-      explicitExpression: !!rawExpr,
-      text: text.trim(),
-      action: null,
-      silent: false,
-    };
+
+    // Parentheses can hold an expression name, the literal word "both", or
+    // both comma-separated in either order, e.g. "(thinking, both)".
+    let expression = "default";
+    let explicitExpression = false;
+    let bothScene = false;
+    if (rawParen) {
+      const tokens = rawParen
+        .split(",")
+        .map((t) => t.trim().toLowerCase())
+        .filter(Boolean);
+      const rest = tokens.filter((t) => t !== "both");
+      bothScene = rest.length !== tokens.length;
+      if (rest.length > 0) {
+        expression = rest[0];
+        explicitExpression = true;
+      }
+    }
+
+    return { charNum, expression, explicitExpression, text: text.trim(), action: null, silent: false, bothScene };
   });
 }
 
@@ -2307,6 +2342,7 @@ async function generateCartoonDialogueVideo() {
   // expressions were added — and fall back to the character's default image
   // for any expression tag that wasn't uploaded (typo, or just not covered).
   let charImages;
+  let togetherImage = null;
   try {
     setStatus("Preparing character images…");
     charImages = { 1: {}, 2: {} };
@@ -2316,18 +2352,36 @@ async function generateCartoonDialogueVideo() {
         charImages[charNum][name] = await fileToResizedDataURL(file);
       }
     }
+    if (els.dialogueBothImage.files[0]) {
+      togetherImage = await fileToResizedDataURL(els.dialogueBothImage.files[0]);
+    }
   } catch (err) {
     setStatus("Couldn't read one of the character images: " + (err.message || "unknown error"), "error");
     return;
   }
-  const imageFor = (charNum, expr) => charImages[charNum][expr] || charImages[charNum].default;
-  const nameFor = (charNum) => (charNum === 1 ? char1Name : char2Name);
+
+  // A "(both)"-tagged line or a "[Both: ...]" beat needs the together image —
+  // check this before spending any generation calls, same reasoning as the
+  // expression-tag check below.
+  if (!togetherImage && lines.some((l) => l.bothScene)) {
+    setStatus('Upload the "Both characters together" reference image first — your script uses "(both)" or "[Both: ...]".', "error");
+    return;
+  }
+
+  const imageFor = (charNum, expr, bothScene) => {
+    if (bothScene && togetherImage) return togetherImage;
+    return charImages[charNum][expr] || charImages[charNum].default;
+  };
+  const nameFor = (charNum) => (charNum === "both" ? `${char1Name} and ${char2Name}` : charNum === 1 ? char1Name : char2Name);
 
   // Fail loudly on an unrecognized expression tag rather than silently
   // falling back to Default — better to catch a typo before spending any
-  // generation calls than to quietly get the wrong pose.
+  // generation calls than to quietly get the wrong pose. Skipped for
+  // "both"-scene lines, since those use the together image regardless of any
+  // expression tag rather than selecting one of a character's own images.
   const unknownTags = [];
   lines.forEach((l, i) => {
+    if (l.charNum === "both" || l.bothScene) return;
     if (l.explicitExpression && !charImages[l.charNum][l.expression]) {
       const have = Object.keys(charImages[l.charNum]).filter((k) => k !== "default");
       unknownTags.push(
@@ -2408,7 +2462,7 @@ async function generateCartoonDialogueVideo() {
     // fits the moment.
     setStatus("Writing each scene…");
     const sceneResults = await runWithConcurrency(lines, 3, async (line, i) => {
-      const availableExpressions = Object.keys(charImages[line.charNum]).filter((k) => k !== "default");
+      const availableExpressions = line.charNum === "both" ? [] : Object.keys(charImages[line.charNum]).filter((k) => k !== "default");
       return await buildDynamicScenePrompt({
         characterName: nameFor(line.charNum),
         characterDescription: null,
@@ -2418,16 +2472,23 @@ async function generateCartoonDialogueVideo() {
         backgroundDescription,
         availableExpressions,
         nonVerbal: line.silent,
+        bothScene: line.bothScene,
         fallback: buildDialogueScenePrompt(nameFor(line.charNum), line.expression),
       });
     });
     sceneResults.forEach((result, i) => {
       const line = lines[i];
-      if (!line.explicitExpression && result.matchedExpression && charImages[line.charNum][result.matchedExpression]) {
+      if (
+        line.charNum !== "both" &&
+        !line.explicitExpression &&
+        result.matchedExpression &&
+        charImages[line.charNum][result.matchedExpression]
+      ) {
         line.expression = result.matchedExpression;
       }
     });
     const scenePrompts = sceneResults.map((r) => r.prompt);
+    const sceneCameraMotions = sceneResults.map((r) => r.cameraMotion);
 
     // 4. Animate each character/expression for each line.
     statuses.fill("waiting");
@@ -2446,8 +2507,9 @@ async function generateCartoonDialogueVideo() {
             prompt: scenePrompts[i],
             style: "cartoon",
             styleOverride: styleDescription,
-            startImage: imageFor(line.charNum, line.expression),
+            startImage: imageFor(line.charNum, line.expression, line.bothScene),
             actionMotion,
+            cameraMotion: sceneCameraMotions[i],
           }),
         });
         const data = await res.json();
