@@ -15,8 +15,10 @@ const MAX_INLINE_BYTES = 4 * 1024 * 1024; // ~4MB, safe under typical serverless
 let mode = "image"; // image | video | lipsync | kids
 let videoSubMode = "t2v"; // t2v | i2v
 let kidsSubMode = "story"; // story | song | cartoon
-let cartoonContentType = "song"; // song | narration
+let cartoonContentType = "song"; // song | narration | dialogue
 let videoAudioSource = "script"; // script | upload
+let dialogueVoiceSource = { 1: "preset", 2: "preset" }; // per-character: preset | clone
+let dialogueClonedVoiceId = { 1: null, 2: null }; // per-character custom_voice_id once cloned
 let voicesLoaded = false;
 let cartoonCharacterUrl = null; // last-generated character image, reused across cartoon scenes
 
@@ -49,6 +51,8 @@ const els = {
   cartoonContentBtns: document.querySelectorAll(".cartoon-content-btn"),
   cartoonSongFields: document.getElementById("cartoonSongFields"),
   cartoonNarrationFields: document.getElementById("cartoonNarrationFields"),
+  cartoonDialogueFields: document.getElementById("cartoonDialogueFields"),
+  cartoonLengthField: document.getElementById("cartoonLengthField"),
   cartoonLyrics: document.getElementById("cartoonLyrics"),
   cartoonSongStyle: document.getElementById("cartoonSongStyle"),
   cartoonScript: document.getElementById("cartoonScript"),
@@ -57,6 +61,30 @@ const els = {
   cartoonVideoModel: document.getElementById("cartoonVideoModel"),
   cartoonAction: document.getElementById("cartoonAction"),
   cartoonLength: document.getElementById("cartoonLength"),
+  dialogueVoiceSourceBtns: document.querySelectorAll(".dialogue-voice-source-btn"),
+  dialogueScript: document.getElementById("dialogueScript"),
+  dialogueChar1Name: document.getElementById("dialogueChar1Name"),
+  dialogueChar1ImgDefault: document.getElementById("dialogueChar1ImgDefault"),
+  dialogueChar1ImgHappy: document.getElementById("dialogueChar1ImgHappy"),
+  dialogueChar1ImgSurprised: document.getElementById("dialogueChar1ImgSurprised"),
+  dialogueChar1PresetVoice: document.getElementById("dialogueChar1PresetVoice"),
+  dialogueChar1CloneVoice: document.getElementById("dialogueChar1CloneVoice"),
+  dialogueChar1Voice: document.getElementById("dialogueChar1Voice"),
+  dialogueChar1VoiceManual: document.getElementById("dialogueChar1VoiceManual"),
+  dialogueChar1CloneFile: document.getElementById("dialogueChar1CloneFile"),
+  dialogueChar1CloneBtn: document.getElementById("dialogueChar1CloneBtn"),
+  dialogueChar1CloneStatus: document.getElementById("dialogueChar1CloneStatus"),
+  dialogueChar2Name: document.getElementById("dialogueChar2Name"),
+  dialogueChar2ImgDefault: document.getElementById("dialogueChar2ImgDefault"),
+  dialogueChar2ImgHappy: document.getElementById("dialogueChar2ImgHappy"),
+  dialogueChar2ImgSurprised: document.getElementById("dialogueChar2ImgSurprised"),
+  dialogueChar2PresetVoice: document.getElementById("dialogueChar2PresetVoice"),
+  dialogueChar2CloneVoice: document.getElementById("dialogueChar2CloneVoice"),
+  dialogueChar2Voice: document.getElementById("dialogueChar2Voice"),
+  dialogueChar2VoiceManual: document.getElementById("dialogueChar2VoiceManual"),
+  dialogueChar2CloneFile: document.getElementById("dialogueChar2CloneFile"),
+  dialogueChar2CloneBtn: document.getElementById("dialogueChar2CloneBtn"),
+  dialogueChar2CloneStatus: document.getElementById("dialogueChar2CloneStatus"),
   kidsProgress: document.getElementById("kidsProgress"),
   modelSelect: document.getElementById("model"),
   aspectRatio: document.getElementById("aspectRatio"),
@@ -166,6 +194,10 @@ function applyCartoonContentTypeUI() {
   els.cartoonContentBtns.forEach((b) => b.classList.toggle("active", b.dataset.cartooncontent === cartoonContentType));
   els.cartoonSongFields.classList.toggle("hidden", cartoonContentType !== "song");
   els.cartoonNarrationFields.classList.toggle("hidden", cartoonContentType !== "narration");
+  els.cartoonDialogueFields.classList.toggle("hidden", cartoonContentType !== "dialogue");
+  // Dialogue's video length is implied by how many lines the script has —
+  // the Length dropdown doesn't apply there.
+  els.cartoonLengthField.classList.toggle("hidden", cartoonContentType === "dialogue");
 }
 
 els.cartoonContentBtns.forEach((btn) => {
@@ -174,6 +206,71 @@ els.cartoonContentBtns.forEach((btn) => {
     applyCartoonContentTypeUI();
   });
 });
+
+function applyDialogueVoiceSourceUI(charNum) {
+  const source = dialogueVoiceSource[charNum];
+  els.dialogueVoiceSourceBtns.forEach((b) => {
+    if (Number(b.dataset.char) === charNum) b.classList.toggle("active", b.dataset.voicesource === source);
+  });
+  const presetEl = charNum === 1 ? els.dialogueChar1PresetVoice : els.dialogueChar2PresetVoice;
+  const cloneEl = charNum === 1 ? els.dialogueChar1CloneVoice : els.dialogueChar2CloneVoice;
+  presetEl.classList.toggle("hidden", source !== "preset");
+  cloneEl.classList.toggle("hidden", source !== "clone");
+}
+
+els.dialogueVoiceSourceBtns.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const charNum = Number(btn.dataset.char);
+    dialogueVoiceSource[charNum] = btn.dataset.voicesource;
+    applyDialogueVoiceSourceUI(charNum);
+  });
+});
+
+// Uploads a short voice sample and clones it via fal's minimax voice-clone
+// model, returning a custom_voice_id string that can be reused anywhere a
+// preset voice ID is accepted (api/tts.js already passes any voiceId string
+// straight through to the TTS model's voice_setting.voice_id field).
+async function cloneVoice(file) {
+  const audioUrl = await uploadFileToFal(file);
+  const res = await fetch("/api/voice-clone", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ audioUrl }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Voice cloning was rejected.");
+  if (data.status === "succeeded" && data.output) return data.output;
+  const result = await pollPredictionPromise(data.id);
+  if (result.status !== "succeeded") throw new Error(result.error || "Voice cloning failed.");
+  return result.url; // pollPrediction stores whatever the output field held here — the custom_voice_id string in this case
+}
+
+function wireDialogueCloneButton(charNum) {
+  const btn = charNum === 1 ? els.dialogueChar1CloneBtn : els.dialogueChar2CloneBtn;
+  const fileInput = charNum === 1 ? els.dialogueChar1CloneFile : els.dialogueChar2CloneFile;
+  const statusEl = charNum === 1 ? els.dialogueChar1CloneStatus : els.dialogueChar2CloneStatus;
+  btn.addEventListener("click", async () => {
+    const file = fileInput.files[0];
+    if (!file) {
+      statusEl.textContent = "Choose a voice sample file first.";
+      return;
+    }
+    btn.disabled = true;
+    statusEl.textContent = "Cloning voice… this can take a minute…";
+    try {
+      const voiceId = await cloneVoice(file);
+      dialogueClonedVoiceId[charNum] = voiceId;
+      statusEl.textContent = "Voice cloned ✓";
+    } catch (err) {
+      dialogueClonedVoiceId[charNum] = null;
+      statusEl.textContent = "Couldn't clone that voice: " + (err.message || "unknown error");
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+wireDialogueCloneButton(1);
+wireDialogueCloneButton(2);
 
 function applyVideoAudioUI() {
   els.videoAudioFields.classList.toggle("hidden", !els.addVideoAudio.checked);
@@ -212,6 +309,10 @@ async function ensureVoicesLoaded() {
       els.cartoonVoiceManual.classList.remove("hidden");
       els.videoAudioVoice.classList.add("hidden");
       els.videoAudioVoiceManual.classList.remove("hidden");
+      els.dialogueChar1Voice.classList.add("hidden");
+      els.dialogueChar1VoiceManual.classList.remove("hidden");
+      els.dialogueChar2Voice.classList.add("hidden");
+      els.dialogueChar2VoiceManual.classList.remove("hidden");
       els.voiceListHint.textContent =
         data.note ||
         "This model doesn't publish a fixed voice list. Type a voice ID above, or leave Adult blank to use the default voice.";
@@ -236,6 +337,8 @@ async function ensureVoicesLoaded() {
     fill(els.adultVoice, data.adult, "(no adult voices found)");
     fill(els.cartoonVoice, data.kid, "(no kid-style voices found — pick from adult list)");
     fill(els.videoAudioVoice, data.kid.concat(data.adult), "(no voices found)");
+    fill(els.dialogueChar1Voice, data.kid.concat(data.adult), "(no voices found)");
+    fill(els.dialogueChar2Voice, data.kid.concat(data.adult), "(no voices found)");
     els.voiceListHint.textContent = `${data.kid.length} kid-style and ${data.adult.length} adult voices available.`;
   } catch (err) {
     els.voiceListHint.textContent = "Couldn't load the voice list: " + (err.message || "network error");
@@ -648,7 +751,24 @@ async function generateImageOrVideo() {
       setStatus("Adding matching audio…");
       const audioUrls = await buildSceneAudioForVideo(1, 5);
       setStatus("Lip-syncing audio to the video…");
-      const syncedUrl = await lipsyncOneScene(finalUrl, audioUrls[0]);
+      let syncedUrl = await lipsyncOneScene(finalUrl, audioUrls[0]);
+
+      // Auto-detect a sound effect from the video's own generation prompt
+      // (that's what actually describes the on-screen action) and mix it in
+      // if one applies — a failed detection/generation just skips this step.
+      try {
+        setStatus("Checking for a sound effect…");
+        const sfxDescription = await detectSfx(prompt);
+        if (sfxDescription) {
+          setStatus("Generating and mixing in a sound effect…");
+          const sfxUrl = await generateSoundEffect(sfxDescription, 2);
+          syncedUrl = await mixSfxAndStitch([syncedUrl], [sfxUrl]);
+        }
+      } catch {
+        // Sound effects are a nice-to-have on top of the main video — never
+        // let a failure here take down an otherwise-successful generation.
+      }
+
       upsertHistoryItem({ id: data.id, url: syncedUrl, label: "Video with matching audio" });
     } catch (err) {
       setStatus(
@@ -1011,15 +1131,35 @@ async function generateStoryboard() {
     }
   }
 
+  // Auto-detect sound effects from each scene's own visual description —
+  // only when scenes already carry real (matching) audio, since mixing an
+  // SFX track onto a genuinely silent clip while others stay silent breaks
+  // stitching (some clips would have an audio stream and some wouldn't).
+  let sfxAudioUrls = null;
+  if (withAudio) {
+    try {
+      setStatus("Checking scenes for sound effects…");
+      const sfxDescriptions = await detectSfxForScenes(scenes);
+      if (sfxDescriptions.some(Boolean)) {
+        setStatus("Generating sound effects…");
+        sfxAudioUrls = await generateSfxAudioClips(sfxDescriptions);
+      }
+    } catch {
+      sfxAudioUrls = null; // sound effects are a nice-to-have — never block the main video over this
+    }
+  }
+
   setStatus("All scenes ready — stitching them into one video in your browser (this can take a few minutes)…");
   try {
-    const finalUrl = await stitchVideoClips(
-      finalClipUrls,
-      (progress) => {
-        setStatus(`Stitching… ${Math.round(progress * 100)}%`);
-      },
-      { withAudio }
-    );
+    const finalUrl = sfxAudioUrls
+      ? await mixSfxAndStitch(finalClipUrls, sfxAudioUrls, (progress) => setStatus(`Stitching… ${Math.round(progress * 100)}%`))
+      : await stitchVideoClips(
+          finalClipUrls,
+          (progress) => {
+            setStatus(`Stitching… ${Math.round(progress * 100)}%`);
+          },
+          { withAudio }
+        );
     els.storyboardProgress.classList.add("hidden");
     upsertHistoryItem({
       id: "storyboard-" + Date.now(),
@@ -1329,6 +1469,156 @@ function chunkScriptIntoScenes(script, targetScenes) {
 // narration video isn't just the same identical shot repeated — the
 // underlying framing/motion requirements (medium shot, continuous mouth
 // movement) stay fixed since those are what make lip sync work well.
+// ---------- Sound effects (auto-detected action sounds mixed into scenes) ----------
+//
+// Every video pipeline below tries to add short sound effects (a rock
+// impact, a door slam, footsteps, etc.) automatically: each scene's text is
+// sent to a small LLM (see api/detect-sfx.js) that decides whether the
+// action calls for a specific sound, and if so a short clip is generated
+// (fal-ai/elevenlabs/sound-effects/v2) and mixed into that scene's audio.
+// Where the user writes the scene text themselves (Narration and Dialogue
+// scripts), they can skip auto-detection for a line and specify the exact
+// sound with an inline tag instead, e.g. "Pip: Watch out! [sfx: a rock
+// hitting a wooden fence]" — the tag is stripped before the line is spoken.
+
+function extractSfxTag(text) {
+  const m = text.match(/\[sfx:\s*([^\]]+)\]/i);
+  if (!m) return { cleanText: text.trim(), manualSfx: null };
+  return { cleanText: text.replace(m[0], "").replace(/\s{2,}/g, " ").trim(), manualSfx: m[1].trim() };
+}
+
+async function detectSfx(text) {
+  try {
+    const res = await fetch("/api/detect-sfx", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+    const data = await res.json();
+    if (!res.ok) return null;
+    return data.sfx || null;
+  } catch {
+    return null;
+  }
+}
+
+// Strips any manual [sfx: ...] tag from each scene's text (using it directly
+// when present) and auto-detects a sound effect for every other scene.
+// Returns arrays the same length/order as `texts`; sfxDescriptions[i] is
+// null when no effect applies to that scene.
+async function resolveSfxForScenes(texts) {
+  const cleanTexts = [];
+  const manualFlags = [];
+  for (const t of texts) {
+    const { cleanText, manualSfx } = extractSfxTag(t);
+    cleanTexts.push(cleanText);
+    manualFlags.push(manualSfx);
+  }
+  const sfxDescriptions = await runWithConcurrency(texts, 3, async (_, i) => (manualFlags[i] ? manualFlags[i] : await detectSfx(cleanTexts[i])));
+  return { cleanTexts, sfxDescriptions };
+}
+
+// Like resolveSfxForScenes, but for scene text the user didn't type
+// themselves (AI-planned storyboard/song scenes, or a video's own generation
+// prompt) — auto-detect only, no manual tag support, since that text also
+// feeds the visual generation call and isn't safe to rewrite here.
+async function detectSfxForScenes(texts) {
+  return await runWithConcurrency(texts, 3, async (t) => await detectSfx(t));
+}
+
+async function generateSoundEffect(text, durationSeconds = 2) {
+  const res = await fetch("/api/sound-effect", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, durationSeconds }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || "Sound effect generation was rejected.");
+  if (data.status === "succeeded") return Array.isArray(data.output) ? data.output[0] : data.output;
+  const result = await pollPredictionPromise(data.id);
+  if (result.status !== "succeeded") throw new Error(result.error || "Sound effect generation failed.");
+  return result.url;
+}
+
+// Generates the actual short SFX clips for whichever scenes got a
+// description back (null entries are skipped and stay null) — a failed
+// individual SFX generation just means that scene plays without one; it's
+// not treated as fatal since it's a nice-to-have on top of the main video.
+async function generateSfxAudioClips(sfxDescriptions) {
+  return await runWithConcurrency(sfxDescriptions, 3, async (desc) => {
+    if (!desc) return null;
+    try {
+      return await generateSoundEffect(desc, 2);
+    } catch {
+      return null;
+    }
+  });
+}
+
+// Mixes each scene's optional SFX clip into its already-lip-synced video
+// track (voice/song audio stays, SFX layers underneath at reduced volume),
+// then stitches the results into one final video — all within a single
+// ffmpeg.wasm session, since reloading ffmpeg per scene would be far slower.
+// Works fine for a single scene too (the concat step just passes it through).
+async function mixSfxAndStitch(sceneUrls, sfxAudioUrls, onProgress) {
+  const { ffmpeg, fetchFile } = await loadFFmpeg(onProgress);
+
+  const finalNames = [];
+  for (let i = 0; i < sceneUrls.length; i++) {
+    const vName = `scene${i}.mp4`;
+    await ffmpeg.writeFile(vName, await fetchFile(sceneUrls[i]));
+    if (sfxAudioUrls[i]) {
+      const sName = `sfx${i}.mp3`;
+      const outName = `mixed${i}.mp4`;
+      try {
+        await ffmpeg.writeFile(sName, await fetchFile(sfxAudioUrls[i]));
+        await ffmpeg.exec([
+          "-i",
+          vName,
+          "-i",
+          sName,
+          "-filter_complex",
+          "[1:a]volume=0.7[sfx];[0:a][sfx]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]",
+          "-map",
+          "0:v",
+          "-map",
+          "[a]",
+          "-c:v",
+          "copy",
+          "-c:a",
+          "aac",
+          "-shortest",
+          outName,
+        ]);
+        finalNames.push(outName);
+        continue;
+      } catch {
+        // Fall through to using the unmixed scene clip below — a failed mix
+        // for one scene shouldn't sink the whole video.
+      }
+    }
+    finalNames.push(vName);
+  }
+
+  if (finalNames.length === 1) {
+    const data = await ffmpeg.readFile(finalNames[0]);
+    return URL.createObjectURL(new Blob([data.buffer], { type: "video/mp4" }));
+  }
+
+  const listContent = finalNames.map((n) => `file '${n}'`).join("\n");
+  await ffmpeg.writeFile("list.txt", listContent);
+  try {
+    await ffmpeg.exec(["-f", "concat", "-safe", "0", "-i", "list.txt", "-c", "copy", "output.mp4"]);
+  } catch {
+    const inputArgs = finalNames.flatMap((n) => ["-i", n]);
+    const filter = `${finalNames.map((_, i) => `[${i}:v:0][${i}:a:0]`).join("")}concat=n=${finalNames.length}:v=1:a=1[v][a]`;
+    await ffmpeg.exec([...inputArgs, "-filter_complex", filter, "-map", "[v]", "-map", "[a]", "output.mp4"]);
+  }
+
+  const data = await ffmpeg.readFile("output.mp4");
+  return URL.createObjectURL(new Blob([data.buffer], { type: "video/mp4" }));
+}
+
 const NARRATION_SCENE_VARIATIONS = [
   "looking up at a sky full of stars, pointing upward while he talks",
   "gesturing warmly with his paws while he talks",
@@ -1347,6 +1637,28 @@ function buildNarrationScenePrompt(sceneIndex) {
     "simple clean background with soft shapes (a fence, some stars, a crescent moon), inviting and cheerful mood, " +
     "no other characters in frame."
   );
+}
+
+// Asks a small LLM to write a scene prompt that has the character actually
+// act out a given line (instead of just standing and talking) in a
+// specific, freshly-invented setting matching that line — used by both the
+// Narration and Dialogue pipelines so scenery and motion vary per line
+// instead of reusing one fixed backdrop/gesture. Falls back to the caller's
+// static prompt (e.g. buildNarrationScenePrompt/buildDialogueScenePrompt) if
+// the LLM call fails, so a hiccup here never blocks the whole video.
+async function buildDynamicScenePrompt(characterName, characterDescription, lineText, expression, fallback) {
+  try {
+    const res = await fetch("/api/build-scene-prompt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ characterName, characterDescription, lineText, expression }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.prompt) return fallback;
+    return data.prompt;
+  } catch {
+    return fallback;
+  }
 }
 
 async function generateCartoonNarrationVideo() {
@@ -1368,7 +1680,7 @@ async function generateCartoonNarrationVideo() {
 
   const voiceId = els.cartoonVoiceManual.classList.contains("hidden") ? els.cartoonVoice.value : els.cartoonVoiceManual.value.trim();
 
-  const chunks = chunkScriptIntoScenes(script, numScenes);
+  let chunks = chunkScriptIntoScenes(script, numScenes);
   if (chunks.length === 0) {
     setStatus("Couldn't split that script into scenes — check it has actual sentences.", "error");
     return;
@@ -1390,7 +1702,17 @@ async function generateCartoonNarrationVideo() {
         .join("");
   };
 
+  let sfxDescriptions = [];
   try {
+    // 0. Strip any manual [sfx: ...] tags from the spoken text (so they're
+    // never voiced by TTS) and resolve a sound effect — manual tag or
+    // auto-detected — for each scene.
+    progress("Checking scenes for sound effects…");
+    setStatus("Checking scenes for sound effects…");
+    const resolved = await resolveSfxForScenes(chunks);
+    chunks = resolved.cleanTexts;
+    sfxDescriptions = resolved.sfxDescriptions;
+
     // 1. Narration audio — one TTS clip per scene chunk (kept separate,
     // rather than one long track sliced up, since each chunk is already the
     // right length for its own scene).
@@ -1416,7 +1738,15 @@ async function generateCartoonNarrationVideo() {
     });
     if (audioError || audioUrls.some((u) => !u)) throw new Error(audioError || "One or more narration lines failed.");
 
-    // 2. Animate the character for each scene.
+    // 2. Write a fresh scene prompt per line — has Pip actually act out what
+    // the line describes, in a setting invented to match it, rather than the
+    // same fixed backyard backdrop and a canned gesture every time.
+    setStatus("Writing each scene…");
+    const scenePrompts = await runWithConcurrency(chunks, 3, async (text, i) =>
+      buildDynamicScenePrompt("Pip", "a friendly cartoon fox character", text, null, buildNarrationScenePrompt(i))
+    );
+
+    // 3. Animate the character for each scene.
     const videoStatuses = chunks.map(() => "waiting");
     renderChunkProgress("Animating character scenes…", videoStatuses);
     setStatus(`Generating ${chunks.length} animated scene(s)…`);
@@ -1431,7 +1761,7 @@ async function generateCartoonNarrationVideo() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             modelId,
-            prompt: buildNarrationScenePrompt(i),
+            prompt: scenePrompts[i],
             style: "cartoon",
             startImage: cartoonCharacterUrl,
             actionMotion,
@@ -1457,7 +1787,7 @@ async function generateCartoonNarrationVideo() {
     });
     if (videoError || sceneVideoUrls.some((u) => !u)) throw new Error(videoError || "One or more scenes failed to animate.");
 
-    // 3. Lip-sync each scene to its own narration line.
+    // 4. Lip-sync each scene to its own narration line.
     const syncStatuses = chunks.map(() => "waiting");
     renderChunkProgress("Lip-syncing each scene…", syncStatuses);
     setStatus("Lip-syncing each scene to its narration line…");
@@ -1486,11 +1816,19 @@ async function generateCartoonNarrationVideo() {
       );
     }
 
-    // 4. Stitch the lip-synced scenes into one final video.
-    setStatus("Stitching the final video together…");
-    const finalUrl = await stitchVideoClips(syncedUrls, (p) => setStatus(`Stitching… ${Math.round(p * 100)}%`), {
-      withAudio: true,
-    });
+    // 5. Generate any sound effects, mix them in, and stitch the final video.
+    let finalUrl;
+    if (sfxDescriptions.some(Boolean)) {
+      setStatus("Generating sound effects…");
+      const sfxAudioUrls = await generateSfxAudioClips(sfxDescriptions);
+      setStatus("Mixing in sound effects and stitching the final video together…");
+      finalUrl = await mixSfxAndStitch(syncedUrls, sfxAudioUrls, (p) => setStatus(`Stitching… ${Math.round(p * 100)}%`));
+    } else {
+      setStatus("Stitching the final video together…");
+      finalUrl = await stitchVideoClips(syncedUrls, (p) => setStatus(`Stitching… ${Math.round(p * 100)}%`), {
+        withAudio: true,
+      });
+    }
 
     els.kidsProgress.classList.add("hidden");
     upsertHistoryItem({
@@ -1549,7 +1887,16 @@ async function generateCartoonSongVideo() {
     // 2. Plan scenes around the character + song theme
     progress("Planning scenes…");
     setStatus("Planning scenes…");
-    const topic = `A cartoon character (${els.cartoonCharacter.value.trim()}) performing a kids song with these lyrics: ${lyrics}`;
+    const topic =
+      `A cartoon character (${els.cartoonCharacter.value.trim()}) performing a kids song with these lyrics: ${lyrics}. ` +
+      "For each scene, have the character actually act out whatever that part of the lyrics describes — dancing, " +
+      "pointing, jumping, interacting with objects — rather than just standing and singing, and invent a specific, " +
+      "simple background matching that moment (2-4 concrete elements), varying the setting scene to scene instead " +
+      "of reusing one backdrop. Every scene must still be a medium shot, front-facing or three-quarter camera " +
+      "clearly showing the character's whole upper body and face (never a close-up), with the character's mouth " +
+      "moving naturally and continuously the whole time since each scene gets lip-synced to the song afterward, " +
+      "flat 2D cartoon animation style, soft rounded character design, bright warm color palette, cheerful " +
+      "preschool-TV-show mood, no other characters in frame.";
     const planRes = await fetch("/api/plan-scenes", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1653,11 +2000,25 @@ async function generateCartoonSongVideo() {
       );
     }
 
-    // 5. Stitch the lip-synced scenes into one final video
-    setStatus("Stitching the final video together…");
-    const finalUrl = await stitchVideoClips(syncedUrls, (p) => setStatus(`Stitching… ${Math.round(p * 100)}%`), {
-      withAudio: true,
-    });
+    // 5. Auto-detect sound effects from each scene's own description (these
+    // scenes were AI-planned, not typed by the user, so there's no manual
+    // [sfx: ...] tag support here — just detection).
+    setStatus("Checking scenes for sound effects…");
+    const sfxDescriptions = await detectSfxForScenes(scenes);
+
+    // 6. Generate any sound effects, mix them in, and stitch the final video.
+    let finalUrl;
+    if (sfxDescriptions.some(Boolean)) {
+      setStatus("Generating sound effects…");
+      const sfxAudioUrls = await generateSfxAudioClips(sfxDescriptions);
+      setStatus("Mixing in sound effects and stitching the final video together…");
+      finalUrl = await mixSfxAndStitch(syncedUrls, sfxAudioUrls, (p) => setStatus(`Stitching… ${Math.round(p * 100)}%`));
+    } else {
+      setStatus("Stitching the final video together…");
+      finalUrl = await stitchVideoClips(syncedUrls, (p) => setStatus(`Stitching… ${Math.round(p * 100)}%`), {
+        withAudio: true,
+      });
+    }
 
     els.kidsProgress.classList.add("hidden");
     upsertHistoryItem({
@@ -1675,12 +2036,291 @@ async function generateCartoonSongVideo() {
   }
 }
 
+// ---------- Cartoon Dialogue Video (two characters, expression images, cloned or preset voices) ----------
+
+const DIALOGUE_EXPRESSION_MOOD = {
+  default: "talking naturally with warmth and enthusiasm",
+  happy: "smiling brightly and talking with cheerful energy",
+  surprised: "eyes wide with surprise, talking with excited emphasis",
+};
+
+function buildDialogueScenePrompt(characterName, expression) {
+  const mood = DIALOGUE_EXPRESSION_MOOD[expression] || DIALOGUE_EXPRESSION_MOOD.default;
+  return (
+    `${characterName}, a friendly cartoon character, stands in a warm, cozy scene, ${mood}. ` +
+    "Medium shot, front-facing camera — the whole upper body and face are clearly visible, not a tight close-up, " +
+    "in the same friendly framing style as a preschool TV show. Mouth moving naturally and continuously in a clear " +
+    "speaking rhythm. Blinks naturally. Flat 2D cartoon animation style, soft rounded character design, bright warm " +
+    "color palette, simple clean background, inviting and cheerful mood, no other characters in frame."
+  );
+}
+
+// Parses "Name: text" / "Name (expression): text" lines, validating each
+// speaker name against the two configured character names up front so a
+// typo fails fast instead of burning API calls before erroring out midway.
+function parseDialogueScript(script, char1Name, char2Name) {
+  const lines = script
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+  if (lines.length === 0) return [];
+
+  const nameMap = {};
+  nameMap[char1Name.trim().toLowerCase()] = 1;
+  nameMap[char2Name.trim().toLowerCase()] = 2;
+
+  return lines.map((line, i) => {
+    const m = line.match(/^([^:()]+?)(?:\s*\(([^)]+)\))?\s*:\s*(.+)$/);
+    if (!m) {
+      throw new Error(`Line ${i + 1} isn't in "Name: text" format: "${line}"`);
+    }
+    const [, rawName, rawExpr, text] = m;
+    const charNum = nameMap[rawName.trim().toLowerCase()];
+    if (!charNum) {
+      throw new Error(`Line ${i + 1}: "${rawName.trim()}" doesn't match either character's name (${char1Name} or ${char2Name}).`);
+    }
+    return { charNum, expression: rawExpr ? rawExpr.trim().toLowerCase() : "default", text: text.trim() };
+  });
+}
+
+async function generateCartoonDialogueVideo() {
+  const char1Name = els.dialogueChar1Name.value.trim();
+  const char2Name = els.dialogueChar2Name.value.trim();
+  if (!char1Name || !char2Name) {
+    setStatus("Give both characters a name first.", "error");
+    return;
+  }
+
+  const script = els.dialogueScript.value.trim();
+  if (!script) {
+    setStatus("Write a dialogue script first.", "error");
+    return;
+  }
+
+  let lines;
+  try {
+    lines = parseDialogueScript(script, char1Name, char2Name);
+  } catch (err) {
+    setStatus(err.message, "error");
+    return;
+  }
+  if (lines.length === 0) {
+    setStatus("Write a dialogue script first.", "error");
+    return;
+  }
+
+  const charImgInputs = {
+    1: { default: els.dialogueChar1ImgDefault, happy: els.dialogueChar1ImgHappy, surprised: els.dialogueChar1ImgSurprised },
+    2: { default: els.dialogueChar2ImgDefault, happy: els.dialogueChar2ImgHappy, surprised: els.dialogueChar2ImgSurprised },
+  };
+  if (!charImgInputs[1].default.files[0] || !charImgInputs[2].default.files[0]) {
+    setStatus("Upload at least a default expression image for both characters.", "error");
+    return;
+  }
+
+  // Voices — cloning (if selected) is expected to have already been done via
+  // the dedicated Clone buttons before generation starts; here we just read
+  // whichever source is selected per character.
+  const resolveVoice = (charNum) => {
+    if (dialogueVoiceSource[charNum] === "clone") {
+      const id = dialogueClonedVoiceId[charNum];
+      if (!id) throw new Error(`Clone character ${charNum}'s voice first (or switch it to a preset voice).`);
+      return id;
+    }
+    const manualEl = charNum === 1 ? els.dialogueChar1VoiceManual : els.dialogueChar2VoiceManual;
+    const presetEl = charNum === 1 ? els.dialogueChar1Voice : els.dialogueChar2Voice;
+    return manualEl.classList.contains("hidden") ? presetEl.value : manualEl.value.trim();
+  };
+
+  let voiceIds;
+  try {
+    voiceIds = { 1: resolveVoice(1), 2: resolveVoice(2) };
+  } catch (err) {
+    setStatus(err.message, "error");
+    return;
+  }
+
+  // Convert each uploaded expression image to a data URL once, up front
+  // (rather than per-line), and fall back to the character's default image
+  // for any expression tag that wasn't uploaded.
+  let charImages;
+  try {
+    setStatus("Preparing character images…");
+    charImages = { 1: {}, 2: {} };
+    for (const charNum of [1, 2]) {
+      for (const expr of ["default", "happy", "surprised"]) {
+        const file = charImgInputs[charNum][expr].files[0];
+        if (file) charImages[charNum][expr] = await fileToResizedDataURL(file);
+      }
+    }
+  } catch (err) {
+    setStatus("Couldn't read one of the character images: " + (err.message || "unknown error"), "error");
+    return;
+  }
+  const imageFor = (charNum, expr) => charImages[charNum][expr] || charImages[charNum].default;
+  const nameFor = (charNum) => (charNum === 1 ? char1Name : char2Name);
+
+  const modelId = els.cartoonVideoModel.value;
+  const actionMotion = els.cartoonAction.value;
+
+  const statuses = lines.map(() => "waiting");
+  const renderProgress = (label) => {
+    els.kidsProgress.classList.remove("hidden");
+    els.kidsProgress.innerHTML =
+      `<div class="hint">${escapeHtml(label)}</div>` +
+      lines
+        .map((l, i) => {
+          const st = statuses[i] || "waiting";
+          const icon = st === "done" ? "✓" : st === "failed" ? "✕" : st === "working" ? "…" : "·";
+          return `<div class="hint">${icon} ${escapeHtml(nameFor(l.charNum))}: ${escapeHtml(l.text.slice(0, 60))}</div>`;
+        })
+        .join("");
+  };
+
+  try {
+    // 1. Strip any manual [sfx: ...] tags from each line (so they're never
+    // spoken by TTS) and resolve a sound effect — manual tag or
+    // auto-detected — for each line.
+    setStatus("Checking lines for sound effects…");
+    const { cleanTexts, sfxDescriptions } = await resolveSfxForScenes(lines.map((l) => l.text));
+    lines.forEach((l, i) => {
+      l.text = cleanTexts[i];
+    });
+
+    // 2. TTS for each line, in each speaker's voice.
+    renderProgress("Generating dialogue audio…");
+    setStatus(`Generating ${lines.length} line(s) of dialogue audio…`);
+    let audioError = null;
+    const audioUrls = await runWithConcurrency(lines, 2, async (line, i) => {
+      statuses[i] = "working";
+      renderProgress("Generating dialogue audio…");
+      try {
+        const url = await generateOneLine(line.text, voiceIds[line.charNum]);
+        statuses[i] = "done";
+        renderProgress("Generating dialogue audio…");
+        return url;
+      } catch (err) {
+        statuses[i] = "failed";
+        renderProgress("Generating dialogue audio…");
+        if (!audioError) audioError = `Line ${i + 1} (${nameFor(line.charNum)}) failed: ${err.message}`;
+        return null;
+      }
+    });
+    if (audioError || audioUrls.some((u) => !u)) throw new Error(audioError || "One or more dialogue lines failed to generate audio.");
+
+    // 3. Write a fresh scene prompt per line — has the speaking character
+    // actually act out what the line describes, in a setting invented to
+    // match it, rather than a generic "stands and talks" pose every time.
+    setStatus("Writing each scene…");
+    const scenePrompts = await runWithConcurrency(lines, 3, async (line, i) =>
+      buildDynamicScenePrompt(nameFor(line.charNum), null, line.text, line.expression, buildDialogueScenePrompt(nameFor(line.charNum), line.expression))
+    );
+
+    // 4. Animate each character/expression for each line.
+    statuses.fill("waiting");
+    renderProgress("Animating each scene…");
+    setStatus(`Generating ${lines.length} animated scene(s)…`);
+    let videoError = null;
+    const sceneVideoUrls = await runWithConcurrency(lines, 2, async (line, i) => {
+      statuses[i] = "working";
+      renderProgress("Animating each scene…");
+      try {
+        const res = await fetch("/api/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            modelId,
+            prompt: scenePrompts[i],
+            style: "cartoon",
+            startImage: imageFor(line.charNum, line.expression),
+            actionMotion,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Scene animation was rejected.");
+        let url = data.status === "succeeded" ? (Array.isArray(data.output) ? data.output[0] : data.output) : null;
+        if (!url) {
+          const result = await pollPredictionPromise(data.id);
+          if (result.status !== "succeeded") throw new Error(result.error || "Scene animation failed.");
+          url = result.url;
+        }
+        statuses[i] = "done";
+        renderProgress("Animating each scene…");
+        return url;
+      } catch (err) {
+        statuses[i] = "failed";
+        renderProgress("Animating each scene…");
+        if (!videoError) videoError = `Scene ${i + 1} (${nameFor(line.charNum)}) failed: ${err.message}`;
+        return null;
+      }
+    });
+    if (videoError || sceneVideoUrls.some((u) => !u)) throw new Error(videoError || "One or more scenes failed to animate.");
+
+    // 5. Lip-sync each scene to its own line.
+    statuses.fill("waiting");
+    renderProgress("Lip-syncing each scene…");
+    setStatus("Lip-syncing each scene to its line…");
+    let syncError = null;
+    const syncedUrls = await runWithConcurrency(lines.map((_, i) => i), 2, async (i) => {
+      statuses[i] = "working";
+      renderProgress("Lip-syncing each scene…");
+      try {
+        const url = await lipsyncOneScene(sceneVideoUrls[i], audioUrls[i]);
+        statuses[i] = "done";
+        renderProgress("Lip-syncing each scene…");
+        return url;
+      } catch (err) {
+        statuses[i] = "failed";
+        renderProgress("Lip-syncing each scene…");
+        if (!syncError) syncError = `Scene ${i + 1} lip sync failed: ${err.message}`;
+        return null;
+      }
+    });
+    if (syncError || syncedUrls.some((u) => !u)) {
+      throw new Error(
+        (syncError || "One or more scenes failed to lip-sync.") +
+          " The animated (silent) scenes are still available: " +
+          sceneVideoUrls.join(" | ")
+      );
+    }
+
+    // 6. Generate any sound effects, mix them in, and stitch the final video.
+    let finalUrl;
+    if (sfxDescriptions.some(Boolean)) {
+      setStatus("Generating sound effects…");
+      const sfxAudioUrls = await generateSfxAudioClips(sfxDescriptions);
+      setStatus("Mixing in sound effects and stitching the final video together…");
+      finalUrl = await mixSfxAndStitch(syncedUrls, sfxAudioUrls, (p) => setStatus(`Stitching… ${Math.round(p * 100)}%`));
+    } else {
+      setStatus("Stitching the final video together…");
+      finalUrl = await stitchVideoClips(syncedUrls, (p) => setStatus(`Stitching… ${Math.round(p * 100)}%`), {
+        withAudio: true,
+      });
+    }
+
+    els.kidsProgress.classList.add("hidden");
+    upsertHistoryItem({
+      id: "cartoon-dialogue-" + Date.now(),
+      prompt: script.slice(0, 120),
+      label: "Cartoon dialogue video",
+      kind: "video",
+      status: "succeeded",
+      url: finalUrl,
+      isBrowserStitched: true,
+    });
+    setStatus("Done — download it from the gallery before refreshing the page.", "success");
+  } catch (err) {
+    setStatus(err.message || "Something went wrong.", "error");
+  }
+}
+
 els.generateBtn.addEventListener("click", async () => {
   els.generateBtn.disabled = true;
   try {
     if (mode === "lipsync") await generateLipsync();
     else if (mode === "kids" && kidsSubMode === "song") await generateKidsSong();
     else if (mode === "kids" && kidsSubMode === "cartoon" && cartoonContentType === "narration") await generateCartoonNarrationVideo();
+    else if (mode === "kids" && kidsSubMode === "cartoon" && cartoonContentType === "dialogue") await generateCartoonDialogueVideo();
     else if (mode === "kids" && kidsSubMode === "cartoon") await generateCartoonSongVideo();
     else if (mode === "kids") await generateKidsStory();
     else if (isStoryboard()) await generateStoryboard();
@@ -1700,5 +2340,7 @@ els.clearBtn.addEventListener("click", () => {
 
 applyModeUI();
 applyCartoonContentTypeUI();
+applyDialogueVoiceSourceUI(1);
+applyDialogueVoiceSourceUI(2);
 applyVideoAudioSourceUI();
 renderGallery();
