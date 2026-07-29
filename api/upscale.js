@@ -21,13 +21,23 @@ const UPSCALERS = {
   },
   video: {
     falModel: "fal-ai/topaz/upscale/video",
+    // Verified against fal's live schema (2026-07): this model has no
+    // resolution-string field at all — its only scale control is
+    // "upscale_factor", a NUMBER from 1-4 (a multiplier: 2 doubles
+    // width/height), not a "1080p"-style string. The two were previously
+    // conflated (one candidate list, one hardcoded "1080p" value), which
+    // meant every real request here sent a string into a numeric field and
+    // got rejected by fal outright — this always failed, silently blamed on
+    // "Upscale request was rejected" rather than the actual mismatch.
     build(schema) {
       const videoField = firstSupportedField(schema, ["video_url", "video"]) || "video_url";
-      const resField = firstSupportedField(schema, ["target_resolution", "resolution", "upscale_factor"]);
+      const resolutionField = firstSupportedField(schema, ["target_resolution", "resolution"]);
+      const factorField = firstSupportedField(schema, ["upscale_factor"]);
       const fpsField = firstSupportedField(schema, ["target_fps", "fps"]);
       return (url) => {
         const input = { [videoField]: url };
-        if (resField) input[resField] = "1080p";
+        if (resolutionField) input[resolutionField] = "1080p";
+        else if (factorField) input[factorField] = 2; // numeric multiplier, not a resolution string
         if (fpsField) input[fpsField] = 30;
         return input;
       };
