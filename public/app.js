@@ -120,6 +120,8 @@ const els = {
   seed: document.getElementById("seed"),
   lipsyncVideo: document.getElementById("lipsyncVideo"),
   lipsyncAudio: document.getElementById("lipsyncAudio"),
+  lipsyncModelField: document.getElementById("lipsyncModelField"),
+  lipsyncModel: document.getElementById("lipsyncModel"),
   generateBtn: document.getElementById("generateBtn"),
   statusLine: document.getElementById("statusLine"),
   gallery: document.getElementById("gallery"),
@@ -388,6 +390,7 @@ function applyModeUI() {
   els.genControls.classList.add("hidden");
   els.lipsyncControls.classList.add("hidden");
   els.kidsControls.classList.add("hidden");
+  els.lipsyncModelField.classList.toggle("hidden", mode === "image");
 
   if (mode === "lipsync") {
     els.lipsyncControls.classList.remove("hidden");
@@ -905,7 +908,7 @@ async function generateLipsync() {
   const res = await fetch("/api/lipsync", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ video: videoUrl, audio: audioUrl }),
+    body: JSON.stringify({ video: videoUrl, audio: audioUrl, model: currentLipsyncModel() }),
   });
   const data = await res.json();
 
@@ -1455,12 +1458,21 @@ async function sliceSongIntoSegments(songUrl, segmentSeconds, count) {
   return segments;
 }
 
+// The single "Lip-sync engine" select (visible in every mode except plain
+// Image) governs which fal.ai model every lip-sync call in the app uses —
+// the plain Lip Sync tab AND every Kids & Songs pipeline that lip-syncs a
+// scene all read this same control, so there's one place to switch engines
+// instead of a setting buried per-mode.
+function currentLipsyncModel() {
+  return (els.lipsyncModel && els.lipsyncModel.value) || "kling";
+}
+
 async function lipsyncOneScene(videoUrl, audioDataUrl) {
   const attempt = async () => {
     const res = await fetch("/api/lipsync", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ video: videoUrl, audio: audioDataUrl }),
+      body: JSON.stringify({ video: videoUrl, audio: audioDataUrl, model: currentLipsyncModel() }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Lip sync was rejected.");
