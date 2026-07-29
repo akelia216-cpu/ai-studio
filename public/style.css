@@ -184,6 +184,19 @@ input[type="file"] {
 
 .advanced .field { margin-top: 12px; }
 
+.character-panel {
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+
+.character-panel h4 {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .card-actions {
   display: flex;
   gap: 8px;
