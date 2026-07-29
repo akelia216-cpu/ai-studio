@@ -247,6 +247,17 @@
               <button class="cartoon-content-btn" data-cartooncontent="dialogue" type="button">Dialogue (2 characters)</button>
             </div>
 
+            <label class="field">
+              <span>Visual style (used for every scene)</span>
+              <textarea id="cartoonStyleDescription" rows="2" placeholder="e.g. soft painterly illustration style, visible brush texture, muted warm color palette, gentle rim lighting, storybook look"></textarea>
+              <span class="hint">Describe your character's actual art style here — this replaces the built-in "flat cartoon, bold outlines" style used in every generated scene. Leave blank to keep the default flat-cartoon look.</span>
+            </label>
+            <label class="field">
+              <span>Setting / background (optional)</span>
+              <textarea id="cartoonBackgroundDescription" rows="2" placeholder="e.g. Pip's cozy backyard at dusk, wooden fence, string lights, a few stars"></textarea>
+              <span class="hint">Leave blank to let each scene invent its own matching background. Fill this in to keep every scene in the same place instead of it changing line to line.</span>
+            </label>
+
             <div id="cartoonSongFields">
               <label class="field">
                 <span>Lyrics</span>
@@ -278,21 +289,13 @@
                   <span>Name (used to label their lines in the script)</span>
                   <input type="text" id="dialogueChar1Name" placeholder="e.g. Pip" />
                 </label>
-                <div class="two-col">
-                  <label class="field">
-                    <span>Default expression (required)</span>
-                    <input type="file" id="dialogueChar1ImgDefault" accept="image/*" />
-                  </label>
-                  <label class="field">
-                    <span>Happy expression (optional)</span>
-                    <input type="file" id="dialogueChar1ImgHappy" accept="image/*" />
-                  </label>
-                </div>
                 <label class="field">
-                  <span>Surprised expression (optional)</span>
-                  <input type="file" id="dialogueChar1ImgSurprised" accept="image/*" />
+                  <span>Default expression (required)</span>
+                  <input type="file" id="dialogueChar1ImgDefault" accept="image/*" />
                 </label>
-                <span class="hint">Tag a line like "Pip (happy): ..." to use that expression for that line instead of the default.</span>
+                <div id="dialogueChar1ExtraExpressions"></div>
+                <button id="dialogueChar1AddExpressionBtn" class="text-btn enhance-btn" type="button">+ Add another expression</button>
+                <span class="hint">Name each one and upload an image for it, then tag a line like "Pip (thinking): ..." or "Pip (triumphant): ..." to use it — add as many as you like. Untagged or unmatched lines use Default.</span>
 
                 <div class="mode-toggle small" role="tablist">
                   <button class="dialogue-voice-source-btn active" data-char="1" data-voicesource="preset" type="button">Preset voice</button>
@@ -321,21 +324,13 @@
                   <span>Name (used to label their lines in the script)</span>
                   <input type="text" id="dialogueChar2Name" placeholder="e.g. Robin" />
                 </label>
-                <div class="two-col">
-                  <label class="field">
-                    <span>Default expression (required)</span>
-                    <input type="file" id="dialogueChar2ImgDefault" accept="image/*" />
-                  </label>
-                  <label class="field">
-                    <span>Happy expression (optional)</span>
-                    <input type="file" id="dialogueChar2ImgHappy" accept="image/*" />
-                  </label>
-                </div>
                 <label class="field">
-                  <span>Surprised expression (optional)</span>
-                  <input type="file" id="dialogueChar2ImgSurprised" accept="image/*" />
+                  <span>Default expression (required)</span>
+                  <input type="file" id="dialogueChar2ImgDefault" accept="image/*" />
                 </label>
-                <span class="hint">Tag a line like "Robin (surprised): ..." to use that expression for that line instead of the default.</span>
+                <div id="dialogueChar2ExtraExpressions"></div>
+                <button id="dialogueChar2AddExpressionBtn" class="text-btn enhance-btn" type="button">+ Add another expression</button>
+                <span class="hint">Name each one and upload an image for it, then tag a line like "Robin (thinking): ..." or "Robin (triumphant): ..." to use it — add as many as you like. Untagged or unmatched lines use Default.</span>
 
                 <div class="mode-toggle small" role="tablist">
                   <button class="dialogue-voice-source-btn active" data-char="2" data-voicesource="preset" type="button">Preset voice</button>
@@ -360,8 +355,11 @@
 
               <label class="field">
                 <span>Dialogue script</span>
-                <textarea id="dialogueScript" rows="8" placeholder="Pip: Did you hear that noise?&#10;Robin (surprised): I think it came from the attic!&#10;Pip: Should we go check it out?"></textarea>
-                <span class="hint">One line per character turn, formatted "Name: line" or "Name (expression): line". Each line becomes its own ~5-second scene, so the video's length is however many lines you write — about 12 lines per minute.</span>
+                <textarea id="dialogueScript" rows="8" placeholder="Pip: Did you hear that noise?&#10;Robin (surprised): I think it came from the attic!&#10;[Pip: creeps toward the attic stairs, listening closely]&#10;Pip: Should we go check it out?"></textarea>
+                <span class="hint">
+                  One line per character turn, formatted "Name: line" or "Name (expression): line" — expression can be any name you've added an image for, e.g. "Pip (thinking): ...". Each line becomes its own ~5-second scene, so the video's length is however many lines you write — about 12 lines per minute.
+                  For a silent beat with no dialogue (a reaction shot, an action), use square brackets instead: "[Name: what they're doing]" or "[Name (expression): what they're doing]" — that scene is animated but not lip-synced.
+                </span>
               </label>
             </div>
 
