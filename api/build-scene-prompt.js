@@ -37,15 +37,47 @@ function buildInstruction({ hasExpressionList, nonVerbal, bothScene }) {
     : "";
 
   const cameraList = CAMERA_KEYS.map((k) => `${k} (${CAMERA_PRESETS[k].label})`).join(", ");
+
+  // A scene only gets lip-synced afterward if someone is actually speaking in
+  // it — a silent/non-verbal beat has no audio to sync, so the face-framing
+  // constraint below doesn't apply to it at all. When someone IS speaking,
+  // the face-detection step in lip-sync needs their face clearly visible in
+  // the frame at the END of the clip too, not just the start — a zoom-out,
+  // dolly-out, or orbit that leaves the speaker's face small, angled away, or
+  // partially out of frame by the end of the shot will make lip-sync fail
+  // even though the earlier part of the clip looked fine.
+  const speakerFaceRule = nonVerbal
+    ? ""
+    : bothScene
+    ? "IMPORTANT — lip-sync safety: this line gets lip-synced afterward, so the SPEAKING character's face must stay " +
+      "clearly visible, reasonably large, and roughly facing the camera for the ENTIRE shot, including the very end " +
+      "— never let their face end up small, angled away, or partially out of frame. This restriction is ONLY about " +
+      "the speaking character, though: the other (non-speaking) character in frame doesn't need to stay " +
+      "face-visible, so a pull-back/reveal shot is still fine as long as it's the speaker staying framed, not the " +
+      "other character.\n"
+    : "IMPORTANT — lip-sync safety: this line gets lip-synced afterward, so the character's face must stay clearly " +
+      "visible, reasonably large, and roughly facing the camera for the ENTIRE shot, including the very end — never " +
+      "let their face end up small, angled away, or partially out of frame by the end of the clip.\n";
+
   const cameraRule = bothScene
     ? `Also choose ONE camera movement from this list (by key): ${cameraList}. Since the starting reference image ` +
       "already shows BOTH characters together, this scene is a good candidate for \"zoom-out\" or \"dolly-out\" — " +
       "starting close on the speaker and pulling back to reveal the other character reacting — when the moment " +
       'actually calls for that kind of reveal. Don\'t force it though: pick "none" or another movement if a static ' +
-      "or simpler shot fits better.\n"
+      "or simpler shot fits better." +
+      (nonVerbal
+        ? "\n"
+        : " Just make sure whichever movement you pick still keeps the SPEAKING character's face framed and " +
+          "readable throughout, per the lip-sync safety rule above — the reveal is about uncovering the other " +
+          "character, not about losing the speaker.\n")
     : `Also choose ONE camera movement from this list (by key): ${cameraList}. The starting reference image only ` +
       "shows this one character alone, so do NOT choose a movement that implies revealing or panning to another " +
-      'character who isn\'t in frame — pick "none" for a static shot unless a simple push/pan/zoom clearly fits.\n';
+      'character who isn\'t in frame — pick "none" for a static shot unless a simple push/pan/zoom clearly fits.' +
+      (nonVerbal
+        ? "\n"
+        : " Zoom-out, dolly-out, and orbit are only safe here if the character's face stays clearly readable " +
+          "throughout per the lip-sync safety rule above — if you're not sure a movement keeps the face readable " +
+          'the whole way through, prefer "zoom-in", "none", or a gentle pan instead.\n');
 
   return (
     "You write ONE vivid prompt for an AI image-to-video model that animates one or two cartoon characters from a " +
@@ -63,6 +95,7 @@ function buildInstruction({ hasExpressionList, nonVerbal, bothScene }) {
       ? "; the other character is visibly present in frame too, reacting to what's happening but not talking.\n"
       : "; no other characters in frame.\n") +
     expressionRule +
+    speakerFaceRule +
     cameraRule +
     "\n" +
     "Respond in EXACTLY this format (nothing else, one line each except PROMPT which is the final 3-5 sentences):\n" +
