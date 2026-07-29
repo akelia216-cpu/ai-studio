@@ -354,11 +354,18 @@
               </div>
 
               <label class="field">
+                <span>Both characters together (optional reference image)</span>
+                <input type="file" id="dialogueBothImage" accept="image/*" />
+                <span class="hint">A single image with both characters in frame together, used for "(both)"-tagged lines and "[Both: ...]" beats below — only needed if your script uses those.</span>
+              </label>
+
+              <label class="field">
                 <span>Dialogue script</span>
-                <textarea id="dialogueScript" rows="8" placeholder="Pip: Did you hear that noise?&#10;Robin (surprised): I think it came from the attic!&#10;[Pip: creeps toward the attic stairs, listening closely]&#10;Pip: Should we go check it out?"></textarea>
+                <textarea id="dialogueScript" rows="8" placeholder="Pip: Did you hear that noise?&#10;Robin (surprised): I think it came from the attic!&#10;Pip (both): Should we go check it out?&#10;[Both: they creep toward the attic stairs together, listening closely]"></textarea>
                 <span class="hint">
-                  One line per character turn, formatted "Name: line" or "Name (expression): line" — expression can be any name you've added an image for, e.g. "Pip (thinking): ...". Each line becomes its own ~5-second scene, so the video's length is however many lines you write — about 12 lines per minute.
+                  One line per character turn, formatted "Name: line" or "Name (expression): line" — expression can be any name you've added an image for, e.g. "Pip (thinking): ...".  Each line becomes its own ~5-second scene, so the video's length is however many lines you write — about 12 lines per minute.
                   For a silent beat with no dialogue (a reaction shot, an action), use square brackets instead: "[Name: what they're doing]" or "[Name (expression): what they're doing]" — that scene is animated but not lip-synced.
+                  To show both characters in one scene, add "both" inside the parentheses on a speaking line — "Pip (both): ..." or "Pip (thinking, both): ..." — or use "[Both: what they're doing]" for a silent two-character beat. Both require the "Both characters together" image above.
                 </span>
               </label>
             </div>
