@@ -96,6 +96,39 @@
             </div>
 
             <div id="storyboardProgress" class="hidden"></div>
+
+            <div id="videoAudioSection">
+              <label class="field checkbox-field">
+                <input type="checkbox" id="addVideoAudio" />
+                <span>Add matching audio (lip-synced automatically)</span>
+              </label>
+              <div id="videoAudioFields" class="hidden">
+                <div class="mode-toggle small" role="tablist">
+                  <button class="video-audio-source-btn active" data-audiosource="script" type="button">Write narration</button>
+                  <button class="video-audio-source-btn" data-audiosource="upload" type="button">Upload audio file</button>
+                </div>
+                <div id="videoAudioScriptFields">
+                  <label class="field">
+                    <span>Script</span>
+                    <textarea id="videoAudioScript" rows="4" placeholder="What should be said in this video..."></textarea>
+                    <span class="hint">For a short clip, this is spoken as one line. For a storyboard, it's automatically split across scenes to roughly match each 5-second clip.</span>
+                  </label>
+                  <label class="field">
+                    <span>Voice</span>
+                    <select id="videoAudioVoice"></select>
+                    <input type="text" id="videoAudioVoiceManual" class="hidden" placeholder="e.g. Wise_Woman" />
+                  </label>
+                </div>
+                <div id="videoAudioUploadFields" class="hidden">
+                  <label class="field">
+                    <span>Audio file</span>
+                    <input type="file" id="videoAudioFile" accept="audio/*" />
+                  </label>
+                  <span class="hint">For a storyboard, this file is automatically sliced into one segment per scene.</span>
+                </div>
+                <span class="hint">Needs the video to actually show a face for lip sync to work — best for talking-head style clips, not general b-roll.</span>
+              </div>
+            </div>
           </div>
 
           <label class="field checkbox-field">
