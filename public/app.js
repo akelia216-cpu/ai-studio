@@ -1551,6 +1551,40 @@ async function lipsyncOneScene(videoUrl, audioDataUrl) {
   }
 }
 
+// Dialogue mode's spoken lines (see generateCartoonDialogueVideo) call
+// Kling's AI Avatar v2 model directly instead of the usual
+// animate-then-lip-sync pipeline — one call that takes the speaker's
+// reference image + that line's TTS audio + the scene prompt, and returns
+// the FINISHED talking clip. This was verified via a live isolated test to
+// hold up on a non-human cartoon-animal face without the "no face detected"
+// failure the old pipeline could hit, at the cost of weaker multi-step
+// physical-action staging than a dedicated image-to-video call — so the
+// scene prompt for these lines is kept expression/reaction-focused rather
+// than describing complex staged actions (see build-scene-prompt.js's
+// skipCameraMotion path, which also applies here since this model has no
+// camera-motion parameter at all). Mirrors lipsyncOneScene's one-retry
+// pattern.
+async function generateAvatarScene(imageUrl, audioUrl, prompt) {
+  const attempt = async () => {
+    const res = await fetch("/api/ai-avatar", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image: imageUrl, audio: audioUrl, prompt }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Avatar scene generation was rejected.");
+    if (data.status === "succeeded") return Array.isArray(data.output) ? data.output[0] : data.output;
+    const result = await pollPredictionPromise(data.id);
+    if (result.status !== "succeeded") throw new Error(result.error || "Avatar scene generation failed.");
+    return result.url;
+  };
+  try {
+    return await attempt();
+  } catch {
+    return await attempt(); // one retry
+  }
+}
+
 // Splits a narration script into up to `targetScenes` chunks, preserving the
 // exact wording (no paraphrasing) and keeping sentences intact where
 // possible, so each chunk reads naturally when spoken and lip-synced to its
@@ -1814,8 +1848,12 @@ function buildNarrationScenePrompt(sceneIndex) {
 // spoken one (nonVerbal), and picks a camera movement per scene — favoring a
 // zoom-out/dolly-out reveal specifically for "both characters together"
 // scenes (bothScene), since only those start from a reference image that
-// already has both characters in it. Falls back to the caller's static
-// prompt (e.g. buildNarrationScenePrompt/buildDialogueScenePrompt) and a
+// already has both characters in it — unless skipCameraMotion is set, which
+// drops camera-motion selection entirely (used by Dialogue mode's spoken
+// lines, which call Kling's AI Avatar v2 directly instead of /api/generate
+// and so have no camera-motion parameter to apply at all). Falls back to
+// the caller's static prompt (e.g.
+// buildNarrationScenePrompt/buildDialogueScenePrompt) and a
 // "none" camera if the LLM call fails, so a hiccup here never blocks the
 // whole video. Always returns { prompt, matchedExpression, cameraMotion }.
 async function buildDynamicScenePrompt(opts) {
@@ -1829,6 +1867,7 @@ async function buildDynamicScenePrompt(opts) {
     availableExpressions,
     nonVerbal,
     bothScene,
+    skipCameraMotion, // true for a scene that won't go through /api/generate at all (see build-scene-prompt.js)
     fallback,
   } = opts;
   try {
@@ -1845,6 +1884,7 @@ async function buildDynamicScenePrompt(opts) {
         availableExpressions,
         nonVerbal,
         bothScene,
+        skipCameraMotion,
       }),
     });
     const data = await res.json();
@@ -2576,6 +2616,13 @@ async function generateCartoonDialogueVideo() {
         availableExpressions,
         nonVerbal: line.silent,
         bothScene: line.bothScene,
+        // Spoken lines are routed to Kling's AI Avatar v2 (see step 4 below)
+        // instead of /api/generate, which has no camera-motion parameter at
+        // all — so camera-motion selection is skipped entirely for them,
+        // not just restricted. Silent beats are unaffected (still get the
+        // full/restricted camera list as before, since they still go
+        // through /api/generate).
+        skipCameraMotion: !line.silent,
         fallback: buildDialogueScenePrompt(nameFor(line.charNum), line.expression),
       });
     });
@@ -2593,80 +2640,70 @@ async function generateCartoonDialogueVideo() {
     const scenePrompts = sceneResults.map((r) => r.prompt);
     const sceneCameraMotions = sceneResults.map((r) => r.cameraMotion);
 
-    // 4. Animate each character/expression for each line.
+    // 4. Render each scene — split by line type instead of one shared
+    // pipeline:
+    //   - Spoken lines (including "(both)"-tagged ones) call Kling's AI
+    //     Avatar v2 (Standard tier) directly: one call takes the speaker's
+    //     matched expression/together image, that line's already-generated
+    //     TTS audio, and the scene prompt, and returns the FINISHED
+    //     talking clip — no separate /api/generate + /api/lipsync pass.
+    //     This was verified via a live isolated test to hold up on a
+    //     non-human cartoon face without the "no face detected" failure the
+    //     old two-step pipeline could hit, and the model has no
+    //     camera-motion parameter at all (see step 3's skipCameraMotion).
+    //   - Silent beats ("[Name: action]" / "[Both: action]") have no
+    //     dialogue to sync to and keep the original /api/generate pipeline
+    //     completely unchanged, camera motion included — the existing
+    //     scene-prompt system's physical-action staging is the stronger fit
+    //     for these, and there's no lip-sync step to skip in the first
+    //     place.
     statuses.fill("waiting");
-    renderProgress("Animating each scene…");
-    setStatus(`Generating ${lines.length} animated scene(s)…`);
-    let videoError = null;
-    const sceneVideoUrls = await runWithConcurrency(lines, 2, async (line, i) => {
+    renderProgress("Rendering each scene…");
+    setStatus(`Generating ${lines.length} scene(s)…`);
+    let renderError = null;
+    const syncedUrls = await runWithConcurrency(lines, 2, async (line, i) => {
       statuses[i] = "working";
-      renderProgress("Animating each scene…");
+      renderProgress("Rendering each scene…");
       try {
-        const res = await fetch("/api/generate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            modelId,
-            prompt: scenePrompts[i],
-            style: "cartoon",
-            styleOverride: styleDescription,
-            startImage: imageFor(line.charNum, line.expression, line.bothScene),
-            actionMotion,
-            cameraMotion: sceneCameraMotions[i],
-          }),
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Scene animation was rejected.");
-        let url = data.status === "succeeded" ? (Array.isArray(data.output) ? data.output[0] : data.output) : null;
-        if (!url) {
-          const result = await pollPredictionPromise(data.id);
-          if (result.status !== "succeeded") throw new Error(result.error || "Scene animation failed.");
-          url = result.url;
+        let url;
+        if (line.silent) {
+          const res = await fetch("/api/generate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              modelId,
+              prompt: scenePrompts[i],
+              style: "cartoon",
+              styleOverride: styleDescription,
+              startImage: imageFor(line.charNum, line.expression, line.bothScene),
+              actionMotion,
+              cameraMotion: sceneCameraMotions[i],
+            }),
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Scene animation was rejected.");
+          url = data.status === "succeeded" ? (Array.isArray(data.output) ? data.output[0] : data.output) : null;
+          if (!url) {
+            const result = await pollPredictionPromise(data.id);
+            if (result.status !== "succeeded") throw new Error(result.error || "Scene animation failed.");
+            url = result.url;
+          }
+        } else {
+          url = await generateAvatarScene(imageFor(line.charNum, line.expression, line.bothScene), audioUrls[i], scenePrompts[i]);
         }
         statuses[i] = "done";
-        renderProgress("Animating each scene…");
+        renderProgress("Rendering each scene…");
         return url;
       } catch (err) {
         statuses[i] = "failed";
-        renderProgress("Animating each scene…");
-        if (!videoError) videoError = `Scene ${i + 1} (${nameFor(line.charNum)}) failed: ${err.message}`;
+        renderProgress("Rendering each scene…");
+        if (!renderError) renderError = `Scene ${i + 1} (${nameFor(line.charNum)}) failed: ${err.message}`;
         return null;
       }
     });
-    if (videoError || sceneVideoUrls.some((u) => !u)) throw new Error(videoError || "One or more scenes failed to animate.");
+    if (renderError || syncedUrls.some((u) => !u)) throw new Error(renderError || "One or more scenes failed to render.");
 
-    // 5. Lip-sync each spoken line's scene to its own audio. Silent beats
-    // have no audio to sync to, so they just use the raw animated clip as-is
-    // (see step 6 for how they still end up with an audio track for stitching).
-    statuses.fill("waiting");
-    renderProgress("Lip-syncing each scene…");
-    setStatus("Lip-syncing each scene to its line…");
-    let syncError = null;
-    const syncedUrls = await runWithConcurrency(lines.map((_, i) => i), 2, async (i) => {
-      if (lines[i].silent) return sceneVideoUrls[i];
-      statuses[i] = "working";
-      renderProgress("Lip-syncing each scene…");
-      try {
-        const url = await lipsyncOneScene(sceneVideoUrls[i], audioUrls[i]);
-        statuses[i] = "done";
-        renderProgress("Lip-syncing each scene…");
-        return url;
-      } catch (err) {
-        statuses[i] = "failed";
-        renderProgress("Lip-syncing each scene…");
-        if (!syncError) syncError = `Scene ${i + 1} lip sync failed: ${err.message}`;
-        return null;
-      }
-    });
-    if (syncError || syncedUrls.some((u) => !u)) {
-      throw new Error(
-        (syncError || "One or more scenes failed to lip-sync.") +
-          " The animated (silent) scenes are still available: " +
-          sceneVideoUrls.join(" | ")
-      );
-    }
-
-    // 6. Generate any sound effects, mix them in, and stitch the final video.
+    // 5. Generate any sound effects, mix them in, and stitch the final video.
     // Silent beats never got a voice track, so they need mixSfxAndStitch's
     // per-scene audio handling even when no scene has a sound effect.
     const anySilent = lines.some((l) => l.silent);
