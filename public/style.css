@@ -197,6 +197,38 @@ input[type="file"] {
   font-weight: 700;
 }
 
+.expression-row {
+  display: grid;
+  grid-template-columns: 1fr 1.3fr auto;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.expression-row input[type="text"] {
+  margin: 0;
+}
+
+.expression-row input[type="file"] {
+  font-size: 11px;
+}
+
+.expression-row .expr-remove-btn {
+  background: none;
+  border: 1px solid var(--panel-border);
+  color: var(--muted);
+  font-size: 11px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.expression-row .expr-remove-btn:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
 .card-actions {
   display: flex;
   gap: 8px;
