@@ -9,13 +9,19 @@
 //
 // It can also pick which of the character's uploaded expression images best
 // fits a line that wasn't explicitly tagged in the script (availableExpressions),
-// and can write a non-verbal "acting only, no talking" scene instead of a
-// spoken one (nonVerbal) for silent beats.
+// can write a non-verbal "acting only, no talking" scene instead of a spoken
+// one (nonVerbal) for silent beats, and now also picks a camera movement per
+// scene from the app's existing CAMERA_PRESETS list — including favoring a
+// zoom-out/dolly-out reveal specifically for "both characters together"
+// scenes (bothScene), since that's the one shot type only possible when the
+// starting reference image already has both characters in it.
 const { callLLM } = require("./_llm");
+const { CAMERA_PRESETS } = require("./_models");
 
 const DEFAULT_STYLE = "flat 2D cartoon animation style, soft rounded character design, bright warm color palette";
+const CAMERA_KEYS = Object.keys(CAMERA_PRESETS);
 
-function buildInstruction({ hasExpressionList, nonVerbal }) {
+function buildInstruction({ hasExpressionList, nonVerbal, bothScene }) {
   const talkingRule = nonVerbal
     ? "This is a SILENT, non-verbal beat — the character is NOT talking. Do not describe any talking or mouth movement; " +
       "just the physical action/reaction itself, with a natural closed or resting mouth unless the action itself " +
@@ -30,10 +36,21 @@ function buildInstruction({ hasExpressionList, nonVerbal }) {
       "feelings.\n"
     : "";
 
+  const cameraList = CAMERA_KEYS.map((k) => `${k} (${CAMERA_PRESETS[k].label})`).join(", ");
+  const cameraRule = bothScene
+    ? `Also choose ONE camera movement from this list (by key): ${cameraList}. Since the starting reference image ` +
+      "already shows BOTH characters together, this scene is a good candidate for \"zoom-out\" or \"dolly-out\" — " +
+      "starting close on the speaker and pulling back to reveal the other character reacting — when the moment " +
+      'actually calls for that kind of reveal. Don\'t force it though: pick "none" or another movement if a static ' +
+      "or simpler shot fits better.\n"
+    : `Also choose ONE camera movement from this list (by key): ${cameraList}. The starting reference image only ` +
+      "shows this one character alone, so do NOT choose a movement that implies revealing or panning to another " +
+      'character who isn\'t in frame — pick "none" for a static shot unless a simple push/pan/zoom clearly fits.\n';
+
   return (
-    "You write ONE vivid prompt for an AI image-to-video model that animates a single cartoon character from a " +
+    "You write ONE vivid prompt for an AI image-to-video model that animates one or two cartoon characters from a " +
     "starting reference image, for children's cartoon content.\n\n" +
-    `Given the character and the ${nonVerbal ? "action/stage direction" : "line they're saying"}, do all of the following:\n` +
+    `Given the character(s) and the ${nonVerbal ? "action/stage direction" : "line they're saying"}, do all of the following:\n` +
     "1. Have the character actually perform whatever physical action is described (e.g. if it's about throwing a " +
     `rock, show the wind-up and throw) ${nonVerbal ? "" : "instead of just standing there talking"}.\n` +
     "2. Background/setting: if a fixed setting is given below, use that exact setting for this scene (only adjust " +
@@ -41,30 +58,37 @@ function buildInstruction({ hasExpressionList, nonVerbal }) {
     "content and mood (2-4 concrete elements), varied from a generic backdrop.\n" +
     "3. ALWAYS include, no matter what: a medium shot, front-facing or three-quarter camera clearly showing the " +
     `character's whole upper body and face (never a tight close-up); ${talkingRule} natural blinking; the exact ` +
-    "visual/art style given below (do not substitute a different art style); a cheerful, gentle mood; no other " +
-    "characters in frame.\n" +
+    "visual/art style given below (do not substitute a different art style); a cheerful, gentle mood" +
+    (bothScene
+      ? "; the other character is visibly present in frame too, reacting to what's happening but not talking.\n"
+      : "; no other characters in frame.\n") +
     expressionRule +
+    cameraRule +
     "\n" +
-    (hasExpressionList
-      ? 'Respond in EXACTLY this two-line format (nothing else):\nEXPRESSION: <name from the list, or "default">\nPROMPT: <the finished 3-5 sentence scene prompt>'
-      : "Write 3-5 sentences. Return ONLY the finished prompt — no preamble, no quotes, no bullet points, no labels.")
+    "Respond in EXACTLY this format (nothing else, one line each except PROMPT which is the final 3-5 sentences):\n" +
+    (hasExpressionList ? 'EXPRESSION: <name from the list, or "default">\n' : "") +
+    "CAMERA: <key from the camera list above>\n" +
+    "PROMPT: <the finished scene prompt>"
   );
 }
 
 function parseReply(text, hasExpressionList) {
-  if (!hasExpressionList) return { prompt: text.replace(/^"|"$/g, "").trim(), matchedExpression: null };
+  const promptMatch = text.match(/PROMPT:\s*([\s\S]+)/i);
+  if (!promptMatch) {
+    // The model didn't follow the format — fall back to treating the whole
+    // reply as the prompt rather than failing the scene outright.
+    return { prompt: text.replace(/^"|"$/g, "").trim(), matchedExpression: null, cameraMotion: "none" };
+  }
 
   const exprMatch = text.match(/EXPRESSION:\s*([^\n]+)/i);
-  const promptMatch = text.match(/PROMPT:\s*([\s\S]+)/i);
-  if (promptMatch) {
-    return {
-      prompt: promptMatch[1].replace(/^"|"$/g, "").trim(),
-      matchedExpression: exprMatch ? exprMatch[1].trim().toLowerCase().replace(/^"|"$/g, "") : null,
-    };
-  }
-  // The model didn't follow the two-line format — fall back to treating the
-  // whole reply as the prompt rather than failing the scene outright.
-  return { prompt: text.replace(/^"|"$/g, "").trim(), matchedExpression: null };
+  const cameraMatch = text.match(/CAMERA:\s*([^\n]+)/i);
+  const rawCamera = cameraMatch ? cameraMatch[1].trim().toLowerCase().replace(/^"|"$/g, "") : "none";
+
+  return {
+    prompt: promptMatch[1].replace(/^"|"$/g, "").trim(),
+    matchedExpression: hasExpressionList && exprMatch ? exprMatch[1].trim().toLowerCase().replace(/^"|"$/g, "") : null,
+    cameraMotion: CAMERA_KEYS.includes(rawCamera) ? rawCamera : "none",
+  };
 }
 
 module.exports = async function handler(req, res) {
@@ -98,6 +122,7 @@ module.exports = async function handler(req, res) {
     backgroundDescription,
     availableExpressions, // string[] of the character's other uploaded expression names, for auto-matching
     nonVerbal, // true for a silent action beat (no dialogue, no lip sync)
+    bothScene, // true when this scene uses the "both characters together" reference image
   } = body;
   if (!characterName || !lineText) {
     res.status(400).json({ error: "characterName and lineText are required." });
@@ -115,14 +140,15 @@ module.exports = async function handler(req, res) {
       ? `Fixed setting to use for every scene: ${backgroundDescription.trim()}`
       : "No fixed setting given — invent one matching this moment."
   );
+  if (bothScene) userTextParts.push("Both characters are together in the starting reference image for this scene.");
   userTextParts.push(`${nonVerbal ? "Action/stage direction" : "Line"}: "${lineText}"`);
 
   try {
-    const instruction = buildInstruction({ hasExpressionList, nonVerbal: !!nonVerbal });
-    const reply = await callLLM(token, instruction, userTextParts.join("\n"), 320);
-    const { prompt, matchedExpression } = parseReply(reply, hasExpressionList);
+    const instruction = buildInstruction({ hasExpressionList, nonVerbal: !!nonVerbal, bothScene: !!bothScene });
+    const reply = await callLLM(token, instruction, userTextParts.join("\n"), 340);
+    const { prompt, matchedExpression, cameraMotion } = parseReply(reply, hasExpressionList);
     if (!prompt) throw new Error("The model returned an empty scene prompt.");
-    res.status(200).json({ prompt, matchedExpression });
+    res.status(200).json({ prompt, matchedExpression, cameraMotion });
   } catch (err) {
     res.status(err.status || 500).json({ error: err.message || "Couldn't build a scene prompt." });
   }
