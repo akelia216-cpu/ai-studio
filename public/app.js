@@ -61,12 +61,14 @@ const els = {
   cartoonVideoModel: document.getElementById("cartoonVideoModel"),
   cartoonAction: document.getElementById("cartoonAction"),
   cartoonLength: document.getElementById("cartoonLength"),
+  cartoonStyleDescription: document.getElementById("cartoonStyleDescription"),
+  cartoonBackgroundDescription: document.getElementById("cartoonBackgroundDescription"),
   dialogueVoiceSourceBtns: document.querySelectorAll(".dialogue-voice-source-btn"),
   dialogueScript: document.getElementById("dialogueScript"),
   dialogueChar1Name: document.getElementById("dialogueChar1Name"),
   dialogueChar1ImgDefault: document.getElementById("dialogueChar1ImgDefault"),
-  dialogueChar1ImgHappy: document.getElementById("dialogueChar1ImgHappy"),
-  dialogueChar1ImgSurprised: document.getElementById("dialogueChar1ImgSurprised"),
+  dialogueChar1ExtraExpressions: document.getElementById("dialogueChar1ExtraExpressions"),
+  dialogueChar1AddExpressionBtn: document.getElementById("dialogueChar1AddExpressionBtn"),
   dialogueChar1PresetVoice: document.getElementById("dialogueChar1PresetVoice"),
   dialogueChar1CloneVoice: document.getElementById("dialogueChar1CloneVoice"),
   dialogueChar1Voice: document.getElementById("dialogueChar1Voice"),
@@ -76,8 +78,8 @@ const els = {
   dialogueChar1CloneStatus: document.getElementById("dialogueChar1CloneStatus"),
   dialogueChar2Name: document.getElementById("dialogueChar2Name"),
   dialogueChar2ImgDefault: document.getElementById("dialogueChar2ImgDefault"),
-  dialogueChar2ImgHappy: document.getElementById("dialogueChar2ImgHappy"),
-  dialogueChar2ImgSurprised: document.getElementById("dialogueChar2ImgSurprised"),
+  dialogueChar2ExtraExpressions: document.getElementById("dialogueChar2ExtraExpressions"),
+  dialogueChar2AddExpressionBtn: document.getElementById("dialogueChar2AddExpressionBtn"),
   dialogueChar2PresetVoice: document.getElementById("dialogueChar2PresetVoice"),
   dialogueChar2CloneVoice: document.getElementById("dialogueChar2CloneVoice"),
   dialogueChar2Voice: document.getElementById("dialogueChar2Voice"),
@@ -225,6 +227,39 @@ els.dialogueVoiceSourceBtns.forEach((btn) => {
     applyDialogueVoiceSourceUI(charNum);
   });
 });
+
+// Expression images beyond "Default" are an open-ended, user-named set (not
+// a fixed happy/surprised pair) — each row is a name + an uploaded image,
+// added/removed freely so a script can reference any expression by name,
+// e.g. "Pip (thinking): ..." or "Pip (triumphant): ...".
+function addExpressionRow(charNum) {
+  const container = charNum === 1 ? els.dialogueChar1ExtraExpressions : els.dialogueChar2ExtraExpressions;
+  const row = document.createElement("div");
+  row.className = "expression-row";
+  row.innerHTML =
+    '<input type="text" class="expr-name-input" placeholder="Expression name, e.g. thinking" />' +
+    '<input type="file" class="expr-file-input" accept="image/*" />' +
+    '<button type="button" class="expr-remove-btn">Remove</button>';
+  row.querySelector(".expr-remove-btn").addEventListener("click", () => row.remove());
+  container.appendChild(row);
+}
+
+// Reads back every expression row for a character as { name, file } pairs —
+// a row only counts once it has both a name and an uploaded image; a row
+// missing either is silently skipped rather than erroring, so a half-filled
+// row someone forgot to remove doesn't block generation.
+function getCharacterExpressionRows(charNum) {
+  const container = charNum === 1 ? els.dialogueChar1ExtraExpressions : els.dialogueChar2ExtraExpressions;
+  return [...container.querySelectorAll(".expression-row")]
+    .map((row) => ({
+      name: row.querySelector(".expr-name-input").value.trim().toLowerCase(),
+      file: row.querySelector(".expr-file-input").files[0] || null,
+    }))
+    .filter((r) => r.name && r.file);
+}
+
+els.dialogueChar1AddExpressionBtn.addEventListener("click", () => addExpressionRow(1));
+els.dialogueChar2AddExpressionBtn.addEventListener("click", () => addExpressionRow(2));
 
 // Uploads a short voice sample and clones it via fal's minimax voice-clone
 // model, returning a custom_voice_id string that can be reused anywhere a
@@ -1367,7 +1402,13 @@ els.generateCharacterBtn.addEventListener("click", async () => {
     const res = await fetch("/api/generate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ modelId: "flux-1.1-pro", prompt: desc, aspectRatio: "1:1", style: "cartoon" }),
+      body: JSON.stringify({
+        modelId: "flux-1.1-pro",
+        prompt: desc,
+        aspectRatio: "1:1",
+        style: "cartoon",
+        styleOverride: els.cartoonStyleDescription.value.trim(),
+      }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Character generation was rejected.");
@@ -1560,44 +1601,84 @@ async function generateSfxAudioClips(sfxDescriptions) {
 // then stitches the results into one final video — all within a single
 // ffmpeg.wasm session, since reloading ffmpeg per scene would be far slower.
 // Works fine for a single scene too (the concat step just passes it through).
-async function mixSfxAndStitch(sceneUrls, sfxAudioUrls, onProgress) {
+//
+// opts.baseHasAudio: per-scene booleans (defaults to all-true). A scene with
+// no base audio at all (a silent, non-verbal Dialogue beat with no TTS/lip
+// sync) still needs SOME audio stream to sit in the same concat list as
+// scenes that do — its sound effect becomes the sole audio track, or true
+// silence is generated, so stitching never mixes audio-having and audio-less
+// clips (which breaks both the fast-copy and filter_complex concat paths).
+async function mixSfxAndStitch(sceneUrls, sfxAudioUrls, onProgress, opts = {}) {
+  const baseHasAudio = opts.baseHasAudio || sceneUrls.map(() => true);
   const { ffmpeg, fetchFile } = await loadFFmpeg(onProgress);
 
   const finalNames = [];
   for (let i = 0; i < sceneUrls.length; i++) {
     const vName = `scene${i}.mp4`;
     await ffmpeg.writeFile(vName, await fetchFile(sceneUrls[i]));
+
+    if (baseHasAudio[i]) {
+      if (sfxAudioUrls[i]) {
+        const sName = `sfx${i}.mp3`;
+        const outName = `mixed${i}.mp4`;
+        try {
+          await ffmpeg.writeFile(sName, await fetchFile(sfxAudioUrls[i]));
+          await ffmpeg.exec([
+            "-i",
+            vName,
+            "-i",
+            sName,
+            "-filter_complex",
+            "[1:a]volume=0.7[sfx];[0:a][sfx]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]",
+            "-map",
+            "0:v",
+            "-map",
+            "[a]",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "aac",
+            "-shortest",
+            outName,
+          ]);
+          finalNames.push(outName);
+          continue;
+        } catch {
+          // Fall through to using the unmixed scene clip below — a failed mix
+          // for one scene shouldn't sink the whole video.
+        }
+      }
+      finalNames.push(vName);
+      continue;
+    }
+
+    // No base audio track on this clip at all — attach the sound effect as
+    // the sole audio track, or true silence if there isn't one, so it still
+    // has an audio stream like every other clip in the list.
+    const outName = `withaudio${i}.mp4`;
     if (sfxAudioUrls[i]) {
       const sName = `sfx${i}.mp3`;
-      const outName = `mixed${i}.mp4`;
-      try {
-        await ffmpeg.writeFile(sName, await fetchFile(sfxAudioUrls[i]));
-        await ffmpeg.exec([
-          "-i",
-          vName,
-          "-i",
-          sName,
-          "-filter_complex",
-          "[1:a]volume=0.7[sfx];[0:a][sfx]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]",
-          "-map",
-          "0:v",
-          "-map",
-          "[a]",
-          "-c:v",
-          "copy",
-          "-c:a",
-          "aac",
-          "-shortest",
-          outName,
-        ]);
-        finalNames.push(outName);
-        continue;
-      } catch {
-        // Fall through to using the unmixed scene clip below — a failed mix
-        // for one scene shouldn't sink the whole video.
-      }
+      await ffmpeg.writeFile(sName, await fetchFile(sfxAudioUrls[i]));
+      await ffmpeg.exec(["-i", vName, "-i", sName, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-shortest", outName]);
+    } else {
+      await ffmpeg.exec([
+        "-i",
+        vName,
+        "-filter_complex",
+        "aevalsrc=0:d=10:s=44100[a]",
+        "-map",
+        "0:v",
+        "-map",
+        "[a]",
+        "-c:v",
+        "copy",
+        "-c:a",
+        "aac",
+        "-shortest",
+        outName,
+      ]);
     }
-    finalNames.push(vName);
+    finalNames.push(outName);
   }
 
   if (finalNames.length === 1) {
@@ -1626,38 +1707,69 @@ const NARRATION_SCENE_VARIATIONS = [
   "leaning in a little closer to the camera while he talks",
 ];
 
+// The default look/setting, used whenever the shared "Visual style"/"Setting"
+// fields are left blank — kept as a fallback constant so a network hiccup on
+// the AI scene-prompt call still produces something reasonable.
+const DEFAULT_VISUAL_STYLE = "flat 2D cartoon animation style, soft rounded character design, bright warm color palette";
+const DEFAULT_NARRATION_BACKGROUND = "a warm, cozy backyard at dusk with a fence, some stars, and a crescent moon";
+const DEFAULT_DIALOGUE_BACKGROUND = "a warm, cozy scene";
+
 function buildNarrationScenePrompt(sceneIndex) {
   const actionDetail = NARRATION_SCENE_VARIATIONS[sceneIndex % NARRATION_SCENE_VARIATIONS.length];
+  const visualStyle = els.cartoonStyleDescription.value.trim() || DEFAULT_VISUAL_STYLE;
+  const background = els.cartoonBackgroundDescription.value.trim() || DEFAULT_NARRATION_BACKGROUND;
   return (
-    `Pip the fox stands in a warm, cozy backyard at dusk, ${actionDetail}. ` +
+    `Pip the fox stands in ${background}, ${actionDetail}. ` +
     "Medium shot, front-facing camera — his whole upper body and face are clearly visible, not a tight close-up, " +
     "in the same friendly framing style as a preschool TV show. He's talking directly to the camera with warmth " +
     "and enthusiasm, his mouth moving naturally and continuously in a clear speaking rhythm, expressive but gentle. " +
-    "He blinks naturally. Flat 2D cartoon animation style, soft rounded character design, bright warm color palette, " +
-    "simple clean background with soft shapes (a fence, some stars, a crescent moon), inviting and cheerful mood, " +
-    "no other characters in frame."
+    `He blinks naturally. ${visualStyle}, simple clean background, inviting and cheerful mood, no other characters in frame.`
   );
 }
 
 // Asks a small LLM to write a scene prompt that has the character actually
-// act out a given line (instead of just standing and talking) in a
-// specific, freshly-invented setting matching that line — used by both the
-// Narration and Dialogue pipelines so scenery and motion vary per line
-// instead of reusing one fixed backdrop/gesture. Falls back to the caller's
-// static prompt (e.g. buildNarrationScenePrompt/buildDialogueScenePrompt) if
-// the LLM call fails, so a hiccup here never blocks the whole video.
-async function buildDynamicScenePrompt(characterName, characterDescription, lineText, expression, fallback) {
+// act out a given line (instead of just standing and talking) in a specific
+// setting matching it (or a fixed setting, if one was given), using the
+// caller's chosen visual style instead of a hardcoded one. Used by both the
+// Narration and Dialogue pipelines. Can also auto-pick which of a
+// character's uploaded expressions best fits an untagged line
+// (availableExpressions), and can write a silent, non-verbal beat instead of
+// a spoken one (nonVerbal). Falls back to the caller's static prompt (e.g.
+// buildNarrationScenePrompt/buildDialogueScenePrompt) if the LLM call fails,
+// so a hiccup here never blocks the whole video. Always returns
+// { prompt, matchedExpression }.
+async function buildDynamicScenePrompt(opts) {
+  const {
+    characterName,
+    characterDescription,
+    lineText,
+    expression,
+    styleDescription,
+    backgroundDescription,
+    availableExpressions,
+    nonVerbal,
+    fallback,
+  } = opts;
   try {
     const res = await fetch("/api/build-scene-prompt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ characterName, characterDescription, lineText, expression }),
+      body: JSON.stringify({
+        characterName,
+        characterDescription,
+        lineText,
+        expression,
+        styleDescription,
+        backgroundDescription,
+        availableExpressions,
+        nonVerbal,
+      }),
     });
     const data = await res.json();
-    if (!res.ok || !data.prompt) return fallback;
-    return data.prompt;
+    if (!res.ok || !data.prompt) return { prompt: fallback, matchedExpression: null };
+    return { prompt: data.prompt, matchedExpression: data.matchedExpression || null };
   } catch {
-    return fallback;
+    return { prompt: fallback, matchedExpression: null };
   }
 }
 
@@ -1742,9 +1854,20 @@ async function generateCartoonNarrationVideo() {
     // the line describes, in a setting invented to match it, rather than the
     // same fixed backyard backdrop and a canned gesture every time.
     setStatus("Writing each scene…");
-    const scenePrompts = await runWithConcurrency(chunks, 3, async (text, i) =>
-      buildDynamicScenePrompt("Pip", "a friendly cartoon fox character", text, null, buildNarrationScenePrompt(i))
-    );
+    const styleDescription = els.cartoonStyleDescription.value.trim();
+    const backgroundDescription = els.cartoonBackgroundDescription.value.trim();
+    const scenePrompts = await runWithConcurrency(chunks, 3, async (text, i) => {
+      const result = await buildDynamicScenePrompt({
+        characterName: "Pip",
+        characterDescription: "a friendly cartoon fox character",
+        lineText: text,
+        expression: null,
+        styleDescription,
+        backgroundDescription,
+        fallback: buildNarrationScenePrompt(i),
+      });
+      return result.prompt;
+    });
 
     // 3. Animate the character for each scene.
     const videoStatuses = chunks.map(() => "waiting");
@@ -1887,15 +2010,18 @@ async function generateCartoonSongVideo() {
     // 2. Plan scenes around the character + song theme
     progress("Planning scenes…");
     setStatus("Planning scenes…");
+    const visualStyleClause = els.cartoonStyleDescription.value.trim() || DEFAULT_VISUAL_STYLE;
+    const backgroundText = els.cartoonBackgroundDescription.value.trim();
+    const backgroundClause = backgroundText
+      ? `Use this exact setting for every single scene, do not invent a different one: ${backgroundText}.`
+      : "Invent a specific, simple background matching that moment (2-4 concrete elements), varying the setting scene to scene instead of reusing one backdrop.";
     const topic =
       `A cartoon character (${els.cartoonCharacter.value.trim()}) performing a kids song with these lyrics: ${lyrics}. ` +
       "For each scene, have the character actually act out whatever that part of the lyrics describes — dancing, " +
-      "pointing, jumping, interacting with objects — rather than just standing and singing, and invent a specific, " +
-      "simple background matching that moment (2-4 concrete elements), varying the setting scene to scene instead " +
-      "of reusing one backdrop. Every scene must still be a medium shot, front-facing or three-quarter camera " +
-      "clearly showing the character's whole upper body and face (never a close-up), with the character's mouth " +
-      "moving naturally and continuously the whole time since each scene gets lip-synced to the song afterward, " +
-      "flat 2D cartoon animation style, soft rounded character design, bright warm color palette, cheerful " +
+      `pointing, jumping, interacting with objects — rather than just standing and singing. ${backgroundClause} ` +
+      "Every scene must still be a medium shot, front-facing or three-quarter camera clearly showing the character's " +
+      "whole upper body and face (never a close-up), with the character's mouth moving naturally and continuously " +
+      `the whole time since each scene gets lip-synced to the song afterward, ${visualStyleClause}, cheerful ` +
       "preschool-TV-show mood, no other characters in frame.";
     const planRes = await fetch("/api/plan-scenes", {
       method: "POST",
@@ -2038,6 +2164,11 @@ async function generateCartoonSongVideo() {
 
 // ---------- Cartoon Dialogue Video (two characters, expression images, cloned or preset voices) ----------
 
+// This is a fixed fallback used only if the AI scene-prompt call
+// (buildDynamicScenePrompt, below) fails — the primary path already sends
+// whatever expression name was tagged (any name, not just these) straight to
+// an LLM that handles it as free text, so this map only needs to cover a
+// generic fallback rather than every possible expression.
 const DIALOGUE_EXPRESSION_MOOD = {
   default: "talking naturally with warmth and enthusiasm",
   happy: "smiling brightly and talking with cheerful energy",
@@ -2045,19 +2176,29 @@ const DIALOGUE_EXPRESSION_MOOD = {
 };
 
 function buildDialogueScenePrompt(characterName, expression) {
-  const mood = DIALOGUE_EXPRESSION_MOOD[expression] || DIALOGUE_EXPRESSION_MOOD.default;
+  const mood =
+    DIALOGUE_EXPRESSION_MOOD[expression] ||
+    (expression && expression !== "default" ? `showing a ${expression} expression while talking` : DIALOGUE_EXPRESSION_MOOD.default);
+  const visualStyle = els.cartoonStyleDescription.value.trim() || DEFAULT_VISUAL_STYLE;
+  const background = els.cartoonBackgroundDescription.value.trim() || DEFAULT_DIALOGUE_BACKGROUND;
   return (
-    `${characterName}, a friendly cartoon character, stands in a warm, cozy scene, ${mood}. ` +
+    `${characterName}, a friendly cartoon character, stands in ${background}, ${mood}. ` +
     "Medium shot, front-facing camera — the whole upper body and face are clearly visible, not a tight close-up, " +
     "in the same friendly framing style as a preschool TV show. Mouth moving naturally and continuously in a clear " +
-    "speaking rhythm. Blinks naturally. Flat 2D cartoon animation style, soft rounded character design, bright warm " +
-    "color palette, simple clean background, inviting and cheerful mood, no other characters in frame."
+    `speaking rhythm. Blinks naturally. ${visualStyle}, simple clean background, inviting and cheerful mood, no other characters in frame.`
   );
 }
 
 // Parses "Name: text" / "Name (expression): text" lines, validating each
 // speaker name against the two configured character names up front so a
 // typo fails fast instead of burning API calls before erroring out midway.
+// A line wrapped in square brackets — "[Name: action]" or "[Name
+// (expression): action]" — is a silent, non-verbal beat: no dialogue, so
+// that scene skips TTS and lip-sync entirely and just plays the animated
+// action (see generateCartoonDialogueVideo). `explicitExpression` records
+// whether the script itself tagged an expression, as opposed to defaulting
+// to "default" — only untagged lines are eligible for automatic
+// expression-matching later.
 function parseDialogueScript(script, char1Name, char2Name) {
   const lines = script
     .split("\n")
@@ -2070,16 +2211,40 @@ function parseDialogueScript(script, char1Name, char2Name) {
   nameMap[char2Name.trim().toLowerCase()] = 2;
 
   return lines.map((line, i) => {
+    const silentMatch = line.match(/^\[\s*([^:()\]]+?)(?:\s*\(([^)]+)\))?\s*:\s*([^\]]+?)\s*\]\s*$/);
+    if (silentMatch) {
+      const [, rawName, rawExpr, action] = silentMatch;
+      const charNum = nameMap[rawName.trim().toLowerCase()];
+      if (!charNum) {
+        throw new Error(`Line ${i + 1}: "${rawName.trim()}" doesn't match either character's name (${char1Name} or ${char2Name}).`);
+      }
+      return {
+        charNum,
+        expression: rawExpr ? rawExpr.trim().toLowerCase() : "default",
+        explicitExpression: !!rawExpr,
+        text: "",
+        action: action.trim(),
+        silent: true,
+      };
+    }
+
     const m = line.match(/^([^:()]+?)(?:\s*\(([^)]+)\))?\s*:\s*(.+)$/);
     if (!m) {
-      throw new Error(`Line ${i + 1} isn't in "Name: text" format: "${line}"`);
+      throw new Error(`Line ${i + 1} isn't in "Name: text" format (or "[Name: action]" for a silent beat): "${line}"`);
     }
     const [, rawName, rawExpr, text] = m;
     const charNum = nameMap[rawName.trim().toLowerCase()];
     if (!charNum) {
       throw new Error(`Line ${i + 1}: "${rawName.trim()}" doesn't match either character's name (${char1Name} or ${char2Name}).`);
     }
-    return { charNum, expression: rawExpr ? rawExpr.trim().toLowerCase() : "default", text: text.trim() };
+    return {
+      charNum,
+      expression: rawExpr ? rawExpr.trim().toLowerCase() : "default",
+      explicitExpression: !!rawExpr,
+      text: text.trim(),
+      action: null,
+      silent: false,
+    };
   });
 }
 
@@ -2109,11 +2274,8 @@ async function generateCartoonDialogueVideo() {
     return;
   }
 
-  const charImgInputs = {
-    1: { default: els.dialogueChar1ImgDefault, happy: els.dialogueChar1ImgHappy, surprised: els.dialogueChar1ImgSurprised },
-    2: { default: els.dialogueChar2ImgDefault, happy: els.dialogueChar2ImgHappy, surprised: els.dialogueChar2ImgSurprised },
-  };
-  if (!charImgInputs[1].default.files[0] || !charImgInputs[2].default.files[0]) {
+  const defaultImgInputs = { 1: els.dialogueChar1ImgDefault, 2: els.dialogueChar2ImgDefault };
+  if (!defaultImgInputs[1].files[0] || !defaultImgInputs[2].files[0]) {
     setStatus("Upload at least a default expression image for both characters.", "error");
     return;
   }
@@ -2141,16 +2303,17 @@ async function generateCartoonDialogueVideo() {
   }
 
   // Convert each uploaded expression image to a data URL once, up front
-  // (rather than per-line), and fall back to the character's default image
-  // for any expression tag that wasn't uploaded.
+  // (rather than per-line) — Default plus however many custom-named
+  // expressions were added — and fall back to the character's default image
+  // for any expression tag that wasn't uploaded (typo, or just not covered).
   let charImages;
   try {
     setStatus("Preparing character images…");
     charImages = { 1: {}, 2: {} };
     for (const charNum of [1, 2]) {
-      for (const expr of ["default", "happy", "surprised"]) {
-        const file = charImgInputs[charNum][expr].files[0];
-        if (file) charImages[charNum][expr] = await fileToResizedDataURL(file);
+      charImages[charNum].default = await fileToResizedDataURL(defaultImgInputs[charNum].files[0]);
+      for (const { name, file } of getCharacterExpressionRows(charNum)) {
+        charImages[charNum][name] = await fileToResizedDataURL(file);
       }
     }
   } catch (err) {
@@ -2160,8 +2323,29 @@ async function generateCartoonDialogueVideo() {
   const imageFor = (charNum, expr) => charImages[charNum][expr] || charImages[charNum].default;
   const nameFor = (charNum) => (charNum === 1 ? char1Name : char2Name);
 
+  // Fail loudly on an unrecognized expression tag rather than silently
+  // falling back to Default — better to catch a typo before spending any
+  // generation calls than to quietly get the wrong pose.
+  const unknownTags = [];
+  lines.forEach((l, i) => {
+    if (l.explicitExpression && !charImages[l.charNum][l.expression]) {
+      const have = Object.keys(charImages[l.charNum]).filter((k) => k !== "default");
+      unknownTags.push(
+        `Line ${i + 1}: "${l.expression}" isn't an uploaded expression for ${nameFor(l.charNum)} (you have: default${
+          have.length ? ", " + have.join(", ") : ""
+        }).`
+      );
+    }
+  });
+  if (unknownTags.length > 0) {
+    setStatus("Fix these expression tags before generating — " + unknownTags.join(" "), "error");
+    return;
+  }
+
   const modelId = els.cartoonVideoModel.value;
   const actionMotion = els.cartoonAction.value;
+  const styleDescription = els.cartoonStyleDescription.value.trim();
+  const backgroundDescription = els.cartoonBackgroundDescription.value.trim();
 
   const statuses = lines.map(() => "waiting");
   const renderProgress = (label) => {
@@ -2172,7 +2356,8 @@ async function generateCartoonDialogueVideo() {
         .map((l, i) => {
           const st = statuses[i] || "waiting";
           const icon = st === "done" ? "✓" : st === "failed" ? "✕" : st === "working" ? "…" : "·";
-          return `<div class="hint">${icon} ${escapeHtml(nameFor(l.charNum))}: ${escapeHtml(l.text.slice(0, 60))}</div>`;
+          const preview = l.silent ? `(silent) ${l.action}` : l.text;
+          return `<div class="hint">${icon} ${escapeHtml(nameFor(l.charNum))}: ${escapeHtml(preview.slice(0, 60))}</div>`;
         })
         .join("");
   };
@@ -2180,18 +2365,23 @@ async function generateCartoonDialogueVideo() {
   try {
     // 1. Strip any manual [sfx: ...] tags from each line (so they're never
     // spoken by TTS) and resolve a sound effect — manual tag or
-    // auto-detected — for each line.
+    // auto-detected — for each line. Silent beats have no spoken text, so
+    // their action description is what gets checked/cleaned instead.
     setStatus("Checking lines for sound effects…");
-    const { cleanTexts, sfxDescriptions } = await resolveSfxForScenes(lines.map((l) => l.text));
+    const sfxSourceTexts = lines.map((l) => (l.silent ? l.action : l.text));
+    const { cleanTexts, sfxDescriptions } = await resolveSfxForScenes(sfxSourceTexts);
     lines.forEach((l, i) => {
-      l.text = cleanTexts[i];
+      if (l.silent) l.action = cleanTexts[i];
+      else l.text = cleanTexts[i];
     });
 
-    // 2. TTS for each line, in each speaker's voice.
+    // 2. TTS for each spoken line, in each speaker's voice — silent beats
+    // have nothing to voice, so they're skipped here entirely.
     renderProgress("Generating dialogue audio…");
-    setStatus(`Generating ${lines.length} line(s) of dialogue audio…`);
+    setStatus(`Generating ${lines.filter((l) => !l.silent).length} line(s) of dialogue audio…`);
     let audioError = null;
     const audioUrls = await runWithConcurrency(lines, 2, async (line, i) => {
+      if (line.silent) return null;
       statuses[i] = "working";
       renderProgress("Generating dialogue audio…");
       try {
@@ -2206,15 +2396,38 @@ async function generateCartoonDialogueVideo() {
         return null;
       }
     });
-    if (audioError || audioUrls.some((u) => !u)) throw new Error(audioError || "One or more dialogue lines failed to generate audio.");
+    if (audioError || audioUrls.some((u, i) => !u && !lines[i].silent)) {
+      throw new Error(audioError || "One or more dialogue lines failed to generate audio.");
+    }
 
     // 3. Write a fresh scene prompt per line — has the speaking character
-    // actually act out what the line describes, in a setting invented to
-    // match it, rather than a generic "stands and talks" pose every time.
+    // actually act out what the line describes, in a setting matching it
+    // (or a fixed one, if given), rather than a generic "stands and talks"
+    // pose every time. For a line the script didn't explicitly tag with an
+    // expression, this also auto-picks whichever uploaded expression best
+    // fits the moment.
     setStatus("Writing each scene…");
-    const scenePrompts = await runWithConcurrency(lines, 3, async (line, i) =>
-      buildDynamicScenePrompt(nameFor(line.charNum), null, line.text, line.expression, buildDialogueScenePrompt(nameFor(line.charNum), line.expression))
-    );
+    const sceneResults = await runWithConcurrency(lines, 3, async (line, i) => {
+      const availableExpressions = Object.keys(charImages[line.charNum]).filter((k) => k !== "default");
+      return await buildDynamicScenePrompt({
+        characterName: nameFor(line.charNum),
+        characterDescription: null,
+        lineText: line.silent ? line.action : line.text,
+        expression: line.expression,
+        styleDescription,
+        backgroundDescription,
+        availableExpressions,
+        nonVerbal: line.silent,
+        fallback: buildDialogueScenePrompt(nameFor(line.charNum), line.expression),
+      });
+    });
+    sceneResults.forEach((result, i) => {
+      const line = lines[i];
+      if (!line.explicitExpression && result.matchedExpression && charImages[line.charNum][result.matchedExpression]) {
+        line.expression = result.matchedExpression;
+      }
+    });
+    const scenePrompts = sceneResults.map((r) => r.prompt);
 
     // 4. Animate each character/expression for each line.
     statuses.fill("waiting");
@@ -2232,6 +2445,7 @@ async function generateCartoonDialogueVideo() {
             modelId,
             prompt: scenePrompts[i],
             style: "cartoon",
+            styleOverride: styleDescription,
             startImage: imageFor(line.charNum, line.expression),
             actionMotion,
           }),
@@ -2256,12 +2470,15 @@ async function generateCartoonDialogueVideo() {
     });
     if (videoError || sceneVideoUrls.some((u) => !u)) throw new Error(videoError || "One or more scenes failed to animate.");
 
-    // 5. Lip-sync each scene to its own line.
+    // 5. Lip-sync each spoken line's scene to its own audio. Silent beats
+    // have no audio to sync to, so they just use the raw animated clip as-is
+    // (see step 6 for how they still end up with an audio track for stitching).
     statuses.fill("waiting");
     renderProgress("Lip-syncing each scene…");
     setStatus("Lip-syncing each scene to its line…");
     let syncError = null;
     const syncedUrls = await runWithConcurrency(lines.map((_, i) => i), 2, async (i) => {
+      if (lines[i].silent) return sceneVideoUrls[i];
       statuses[i] = "working";
       renderProgress("Lip-syncing each scene…");
       try {
@@ -2285,12 +2502,17 @@ async function generateCartoonDialogueVideo() {
     }
 
     // 6. Generate any sound effects, mix them in, and stitch the final video.
+    // Silent beats never got a voice track, so they need mixSfxAndStitch's
+    // per-scene audio handling even when no scene has a sound effect.
+    const anySilent = lines.some((l) => l.silent);
     let finalUrl;
-    if (sfxDescriptions.some(Boolean)) {
-      setStatus("Generating sound effects…");
-      const sfxAudioUrls = await generateSfxAudioClips(sfxDescriptions);
+    if (sfxDescriptions.some(Boolean) || anySilent) {
+      const sfxAudioUrls = sfxDescriptions.some(Boolean) ? await generateSfxAudioClips(sfxDescriptions) : lines.map(() => null);
+      if (sfxDescriptions.some(Boolean)) setStatus("Generating sound effects…");
       setStatus("Mixing in sound effects and stitching the final video together…");
-      finalUrl = await mixSfxAndStitch(syncedUrls, sfxAudioUrls, (p) => setStatus(`Stitching… ${Math.round(p * 100)}%`));
+      finalUrl = await mixSfxAndStitch(syncedUrls, sfxAudioUrls, (p) => setStatus(`Stitching… ${Math.round(p * 100)}%`), {
+        baseHasAudio: lines.map((l) => !l.silent),
+      });
     } else {
       setStatus("Stitching the final video together…");
       finalUrl = await stitchVideoClips(syncedUrls, (p) => setStatus(`Stitching… ${Math.round(p * 100)}%`), {
