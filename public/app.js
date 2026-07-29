@@ -1,3 +1,339 @@
+AI Studio — Code Updates
+Full replacement files for the Narration video pipeline, extended length options, and the “Add matching audio” feature on the Video tab.
+public/index.html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AI Studio — Image &amp; Video Generator</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <h1>AI Studio</h1>
+      <p class="subtitle">Your personal image &amp; video generator</p>
+    </header>
+
+    <main class="layout">
+      <section class="panel controls">
+        <div class="mode-toggle" role="tablist">
+          <button class="mode-btn active" data-mode="image" type="button">Image</button>
+          <button class="mode-btn" data-mode="video" type="button">Video</button>
+          <button class="mode-btn" data-mode="lipsync" type="button">Lip Sync</button>
+          <button class="mode-btn" data-mode="kids" type="button">Kids &amp; Songs</button>
+        </div>
+
+        <!-- Image / Video shared controls -->
+        <div id="genControls">
+          <label class="field">
+            <span id="promptLabel">Prompt</span>
+            <textarea id="prompt" rows="4" placeholder="A lighthouse at sunset, cinematic lighting, ultra detailed..."></textarea>
+          </label>
+          <button id="enhanceBtn" class="text-btn enhance-btn" type="button">✨ Enhance prompt with AI</button>
+
+          <label class="field">
+            <span>Model</span>
+            <select id="model"></select>
+          </label>
+
+          <label class="field">
+            <span>Aspect ratio</span>
+            <select id="aspectRatio">
+              <option value="1:1">Square (1:1)</option>
+              <option value="16:9" selected>Landscape (16:9)</option>
+              <option value="9:16">Portrait (9:16)</option>
+            </select>
+          </label>
+
+          <!-- Video-only -->
+          <div id="videoOnlyControls">
+            <label class="field">
+              <span>Length</span>
+              <select id="videoLength">
+                <option value="short" selected>Short clip (~5s)</option>
+                <option value="30">Storyboard — 30 seconds</option>
+                <option value="60">Storyboard — 60 seconds</option>
+                <option value="90">Storyboard — 90 seconds</option>
+                <option value="120">Storyboard — 2 minutes</option>
+              </select>
+              <span class="hint" id="lengthHint"></span>
+            </label>
+
+            <div id="singleShotControls">
+              <div class="mode-toggle small" role="tablist">
+                <button class="submode-btn active" data-submode="t2v" type="button">Text → Video</button>
+                <button class="submode-btn" data-submode="i2v" type="button">Image → Video</button>
+              </div>
+
+              <label class="field">
+                <span>Camera movement</span>
+                <select id="cameraMotion">
+                  <option value="none">None</option>
+                  <option value="zoom-in">Zoom in</option>
+                  <option value="zoom-out">Zoom out</option>
+                  <option value="pan-left">Pan left</option>
+                  <option value="pan-right">Pan right</option>
+                  <option value="orbit-left">Orbit left</option>
+                  <option value="orbit-right">Orbit right</option>
+                  <option value="tilt-up">Tilt up</option>
+                  <option value="tilt-down">Tilt down</option>
+                  <option value="dolly-in">Dolly in</option>
+                  <option value="dolly-out">Dolly out</option>
+                </select>
+                <span class="hint">Applied as a native camera control when the model supports it, otherwise woven into the prompt.</span>
+              </label>
+
+              <div class="two-col">
+                <label class="field">
+                  <span id="startImageLabel">Start frame (optional)</span>
+                  <input type="file" id="startImage" accept="image/*" />
+                </label>
+                <label class="field" id="endImageField">
+                  <span>End frame (optional)</span>
+                  <input type="file" id="endImage" accept="image/*" />
+                </label>
+              </div>
+              <span class="hint" id="keyframeHint">Upload one or both to guide the shot like a keyframe. Not every model supports an end frame — you'll be told if it was ignored.</span>
+            </div>
+
+            <div id="storyboardProgress" class="hidden"></div>
+
+            <div id="videoAudioSection">
+              <label class="field checkbox-field">
+                <input type="checkbox" id="addVideoAudio" />
+                <span>Add matching audio (lip-synced automatically)</span>
+              </label>
+              <div id="videoAudioFields" class="hidden">
+                <div class="mode-toggle small" role="tablist">
+                  <button class="video-audio-source-btn active" data-audiosource="script" type="button">Write narration</button>
+                  <button class="video-audio-source-btn" data-audiosource="upload" type="button">Upload audio file</button>
+                </div>
+                <div id="videoAudioScriptFields">
+                  <label class="field">
+                    <span>Script</span>
+                    <textarea id="videoAudioScript" rows="4" placeholder="What should be said in this video..."></textarea>
+                    <span class="hint">For a short clip, this is spoken as one line. For a storyboard, it's automatically split across scenes to roughly match each 5-second clip.</span>
+                  </label>
+                  <label class="field">
+                    <span>Voice</span>
+                    <select id="videoAudioVoice"></select>
+                    <input type="text" id="videoAudioVoiceManual" class="hidden" placeholder="e.g. Wise_Woman" />
+                  </label>
+                </div>
+                <div id="videoAudioUploadFields" class="hidden">
+                  <label class="field">
+                    <span>Audio file</span>
+                    <input type="file" id="videoAudioFile" accept="audio/*" />
+                  </label>
+                  <span class="hint">For a storyboard, this file is automatically sliced into one segment per scene.</span>
+                </div>
+                <span class="hint">Needs the video to actually show a face for lip sync to work — best for talking-head style clips, not general b-roll.</span>
+              </div>
+            </div>
+          </div>
+
+          <label class="field checkbox-field">
+            <input type="checkbox" id="ugcStyle" />
+            <span>UGC / authentic style (skip the polished AI look)</span>
+          </label>
+          <div id="referenceImageField" class="field">
+            <span>Reference photo — product or person (optional)</span>
+            <input type="file" id="referenceImage" accept="image/*" />
+            <span class="hint">For images, this gets edited into the new scene (keeps it recognizable). For video, it's used as a character/subject reference if the model supports one.</span>
+          </div>
+
+          <details class="advanced">
+            <summary>Advanced</summary>
+            <label class="field">
+              <span>Negative prompt (images only)</span>
+              <input type="text" id="negativePrompt" placeholder="blurry, low quality, watermark..." />
+            </label>
+            <label class="field">
+              <span>Seed (optional, for repeatable results)</span>
+              <input type="number" id="seed" placeholder="Leave blank for random" />
+            </label>
+          </details>
+        </div>
+
+        <!-- Lip sync only -->
+        <div id="lipsyncControls" class="hidden">
+          <label class="field">
+            <span>Source video (a person talking or moving on camera)</span>
+            <input type="file" id="lipsyncVideo" accept="video/*" />
+          </label>
+          <label class="field">
+            <span>Audio to sync to</span>
+            <input type="file" id="lipsyncAudio" accept="audio/*" />
+          </label>
+          <span class="hint">Keep clips short (a few seconds) — large files may fail to upload on the free hosting tier.</span>
+        </div>
+
+        <!-- Kids content: spoken story with multiple voices, or a song -->
+        <div id="kidsControls" class="hidden">
+          <div class="mode-toggle small" role="tablist">
+            <button class="kids-submode-btn active" data-kidsmode="story" type="button">Story (spoken)</button>
+            <button class="kids-submode-btn" data-kidsmode="song" type="button">Song</button>
+            <button class="kids-submode-btn" data-kidsmode="cartoon" type="button">Cartoon Song Video</button>
+          </div>
+
+          <!-- Story sub-mode -->
+          <div id="kidsStoryControls">
+            <label class="field">
+              <span>Script</span>
+              <textarea id="kidsScript" rows="6" placeholder="Kid: Where do stars come from?&#10;Adult: Great question! A long, long time ago..."></textarea>
+              <span class="hint">Start each line with "Kid:" or "Adult:" so the right voice reads it. Unlabeled lines are read by the adult voice.</span>
+            </label>
+
+            <div class="two-col">
+              <label class="field">
+                <span>Kid voice</span>
+                <select id="kidVoice"></select>
+                <input type="text" id="kidVoiceManual" class="hidden" placeholder="e.g. Sweet_Girl_2" />
+              </label>
+              <label class="field">
+                <span>Adult voice</span>
+                <select id="adultVoice"></select>
+                <input type="text" id="adultVoiceManual" class="hidden" placeholder="e.g. Wise_Woman (default if left blank)" />
+              </label>
+            </div>
+            <span class="hint" id="voiceListHint"></span>
+          </div>
+
+          <!-- Song sub-mode -->
+          <div id="kidsSongControls" class="hidden">
+            <label class="field">
+              <span>Lyrics</span>
+              <textarea id="songLyrics" rows="6" placeholder="[Verse]&#10;Twinkle twinkle little star...&#10;&#10;[Chorus]&#10;How I wonder what you are..."></textarea>
+              <span class="hint">Section tags like [Verse] and [Chorus] help structure the song.</span>
+            </label>
+            <label class="field">
+              <span>Style / mood</span>
+              <input type="text" id="songStyle" placeholder="cheerful kids nursery rhyme, ukulele and glockenspiel, upbeat" />
+            </label>
+            <label class="field">
+              <span>Singer voice</span>
+              <select id="songVoice">
+                <option value="kid">Kid-sounding voice</option>
+                <option value="adult" selected>Adult-sounding voice</option>
+                <option value="duet">Kid + adult duet</option>
+                <option value="choir">Kids' choir</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Length</span>
+              <select id="songLength">
+                <option value="30">30 seconds</option>
+                <option value="60" selected>60 seconds</option>
+                <option value="90">90 seconds</option>
+                <option value="120">2 minutes</option>
+              </select>
+            </label>
+          </div>
+
+          <!-- Cartoon Song Video sub-mode -->
+          <div id="kidsCartoonControls" class="hidden">
+            <label class="field">
+              <span>Character description</span>
+              <textarea id="cartoonCharacter" rows="3" placeholder="a cheerful orange fox cub, big round eyes, red bandana, simple cartoon shapes"></textarea>
+            </label>
+            <button id="generateCharacterBtn" class="text-btn enhance-btn" type="button">🎨 Generate character design</button>
+            <div id="cartoonCharacterPreview" class="hidden">
+              <img id="cartoonCharacterImg" alt="Character preview" />
+              <span class="hint">Don't love it? Tweak the description and regenerate — this image is reused in every scene so it's worth getting right first.</span>
+            </div>
+
+            <div class="mode-toggle small" role="tablist">
+              <button class="cartoon-content-btn active" data-cartooncontent="song" type="button">Song</button>
+              <button class="cartoon-content-btn" data-cartooncontent="narration" type="button">Narration (spoken)</button>
+            </div>
+
+            <div id="cartoonSongFields">
+              <label class="field">
+                <span>Lyrics</span>
+                <textarea id="cartoonLyrics" rows="6" placeholder="[Verse]&#10;Let's dance and jump and sing today...&#10;&#10;[Chorus]&#10;Come on everybody, hooray!"></textarea>
+              </label>
+              <label class="field">
+                <span>Style / mood</span>
+                <input type="text" id="cartoonSongStyle" placeholder="cheerful kids sing-along, ukulele and handclaps, bouncy tempo" />
+              </label>
+            </div>
+
+            <div id="cartoonNarrationFields" class="hidden">
+              <label class="field">
+                <span>Script</span>
+                <textarea id="cartoonScript" rows="6" placeholder="Hi friends, it's me, Pip! Tonight the sky is full of stars, and I want to show you something amazing..."></textarea>
+                <span class="hint">Written exactly as Pip should say it — this gets split across scenes automatically, no "Kid:"/"Adult:" labels needed here.</span>
+              </label>
+              <label class="field">
+                <span>Pip's voice</span>
+                <select id="cartoonVoice"></select>
+                <input type="text" id="cartoonVoiceManual" class="hidden" placeholder="e.g. cute_boy" />
+              </label>
+            </div>
+
+            <div class="two-col">
+              <label class="field">
+                <span>Video model</span>
+                <select id="cartoonVideoModel">
+                  <option value="minimax-video-01">Minimax Video-01</option>
+                  <option value="kling-v1.6-standard">Kling v1.6 Standard</option>
+                </select>
+              </label>
+              <label class="field">
+                <span>Main action</span>
+                <select id="cartoonAction">
+                  <option value="none">Mixed / varied</option>
+                  <option value="dance">Dancing</option>
+                  <option value="jump">Jumping</option>
+                  <option value="wave">Waving</option>
+                  <option value="spin">Spinning/twirling</option>
+                  <option value="clap">Clapping</option>
+                  <option value="bounce">Bouncing</option>
+                </select>
+              </label>
+            </div>
+
+            <label class="field">
+              <span>Length</span>
+              <select id="cartoonLength">
+                <option value="30" selected>30 seconds</option>
+                <option value="60">60 seconds</option>
+                <option value="90">90 seconds</option>
+                <option value="120">2 minutes</option>
+                <option value="180">3 minutes</option>
+                <option value="240">4 minutes</option>
+                <option value="300">5 minutes</option>
+                <option value="360">6 minutes</option>
+                <option value="420">7 minutes</option>
+              </select>
+              <span class="hint">Builds ~1 scene per 5 seconds, animates each with the character, lip-syncs each scene to its own audio, then stitches it all into one video. Expect several minutes and roughly (scene count) × (video + lip-sync cost) — start with 30s the first time.</span>
+            </label>
+          </div>
+
+          <div id="kidsProgress" class="hidden"></div>
+        </div>
+
+        <button id="generateBtn" class="generate-btn" type="button">Generate</button>
+
+        <p id="statusLine" class="status-line"></p>
+      </section>
+
+      <section class="panel gallery-panel">
+        <div class="gallery-header">
+          <h2>Your creations</h2>
+          <button id="clearBtn" class="text-btn" type="button">Clear history</button>
+        </div>
+        <div id="gallery" class="gallery"></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
+public/app.js
 // Keep this in sync with api/_models.js (label + kind only — the backend
 // owns the actual parameter whitelist and schema introspection).
 const MODELS = {
@@ -15,6 +351,8 @@ const MAX_INLINE_BYTES = 4 * 1024 * 1024; // ~4MB, safe under typical serverless
 let mode = "image"; // image | video | lipsync | kids
 let videoSubMode = "t2v"; // t2v | i2v
 let kidsSubMode = "story"; // story | song | cartoon
+let cartoonContentType = "song"; // song | narration
+let videoAudioSource = "script"; // script | upload
 let voicesLoaded = false;
 let cartoonCharacterUrl = null; // last-generated character image, reused across cartoon scenes
 
@@ -44,8 +382,14 @@ const els = {
   generateCharacterBtn: document.getElementById("generateCharacterBtn"),
   cartoonCharacterPreview: document.getElementById("cartoonCharacterPreview"),
   cartoonCharacterImg: document.getElementById("cartoonCharacterImg"),
+  cartoonContentBtns: document.querySelectorAll(".cartoon-content-btn"),
+  cartoonSongFields: document.getElementById("cartoonSongFields"),
+  cartoonNarrationFields: document.getElementById("cartoonNarrationFields"),
   cartoonLyrics: document.getElementById("cartoonLyrics"),
   cartoonSongStyle: document.getElementById("cartoonSongStyle"),
+  cartoonScript: document.getElementById("cartoonScript"),
+  cartoonVoice: document.getElementById("cartoonVoice"),
+  cartoonVoiceManual: document.getElementById("cartoonVoiceManual"),
   cartoonVideoModel: document.getElementById("cartoonVideoModel"),
   cartoonAction: document.getElementById("cartoonAction"),
   cartoonLength: document.getElementById("cartoonLength"),
@@ -58,6 +402,15 @@ const els = {
   videoLength: document.getElementById("videoLength"),
   lengthHint: document.getElementById("lengthHint"),
   storyboardProgress: document.getElementById("storyboardProgress"),
+  addVideoAudio: document.getElementById("addVideoAudio"),
+  videoAudioFields: document.getElementById("videoAudioFields"),
+  videoAudioSourceBtns: document.querySelectorAll(".video-audio-source-btn"),
+  videoAudioScriptFields: document.getElementById("videoAudioScriptFields"),
+  videoAudioUploadFields: document.getElementById("videoAudioUploadFields"),
+  videoAudioScript: document.getElementById("videoAudioScript"),
+  videoAudioVoice: document.getElementById("videoAudioVoice"),
+  videoAudioVoiceManual: document.getElementById("videoAudioVoiceManual"),
+  videoAudioFile: document.getElementById("videoAudioFile"),
   cameraMotion: document.getElementById("cameraMotion"),
   startImage: document.getElementById("startImage"),
   startImageLabel: document.getElementById("startImageLabel"),
@@ -145,6 +498,36 @@ els.kidsSubmodeBtns.forEach((btn) => {
   });
 });
 
+function applyCartoonContentTypeUI() {
+  els.cartoonContentBtns.forEach((b) => b.classList.toggle("active", b.dataset.cartooncontent === cartoonContentType));
+  els.cartoonSongFields.classList.toggle("hidden", cartoonContentType !== "song");
+  els.cartoonNarrationFields.classList.toggle("hidden", cartoonContentType !== "narration");
+}
+
+els.cartoonContentBtns.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    cartoonContentType = btn.dataset.cartooncontent;
+    applyCartoonContentTypeUI();
+  });
+});
+
+function applyVideoAudioUI() {
+  els.videoAudioFields.classList.toggle("hidden", !els.addVideoAudio.checked);
+}
+els.addVideoAudio.addEventListener("change", applyVideoAudioUI);
+
+function applyVideoAudioSourceUI() {
+  els.videoAudioSourceBtns.forEach((b) => b.classList.toggle("active", b.dataset.audiosource === videoAudioSource));
+  els.videoAudioScriptFields.classList.toggle("hidden", videoAudioSource !== "script");
+  els.videoAudioUploadFields.classList.toggle("hidden", videoAudioSource !== "upload");
+}
+els.videoAudioSourceBtns.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    videoAudioSource = btn.dataset.audiosource;
+    applyVideoAudioSourceUI();
+  });
+});
+
 async function ensureVoicesLoaded() {
   if (voicesLoaded) return;
   voicesLoaded = true; // don't retry-storm on every tab switch if it fails
@@ -161,6 +544,10 @@ async function ensureVoicesLoaded() {
       els.adultVoice.classList.add("hidden");
       els.kidVoiceManual.classList.remove("hidden");
       els.adultVoiceManual.classList.remove("hidden");
+      els.cartoonVoice.classList.add("hidden");
+      els.cartoonVoiceManual.classList.remove("hidden");
+      els.videoAudioVoice.classList.add("hidden");
+      els.videoAudioVoiceManual.classList.remove("hidden");
       els.voiceListHint.textContent =
         data.note ||
         "This model doesn't publish a fixed voice list. Type a voice ID above, or leave Adult blank to use the default voice.";
@@ -183,6 +570,8 @@ async function ensureVoicesLoaded() {
     };
     fill(els.kidVoice, data.kid, "(no kid-style voices found — pick from adult list)");
     fill(els.adultVoice, data.adult, "(no adult voices found)");
+    fill(els.cartoonVoice, data.kid, "(no kid-style voices found — pick from adult list)");
+    fill(els.videoAudioVoice, data.kid.concat(data.adult), "(no voices found)");
     els.voiceListHint.textContent = `${data.kid.length} kid-style and ${data.adult.length} adult voices available.`;
   } catch (err) {
     els.voiceListHint.textContent = "Couldn't load the voice list: " + (err.message || "network error");
@@ -212,6 +601,7 @@ function applyModeUI() {
     if (mode === "video") {
       applyVideoSubModeUI();
       applyVideoLengthUI();
+      ensureVoicesLoaded(); // needed for the "Add matching audio" voice picker
     } else {
       els.promptLabel.textContent = "Prompt";
     }
@@ -578,12 +968,33 @@ async function generateImageOrVideo() {
     if (data.appliedFeatures.referenceImage === false) notes.push("reference photo wasn't supported by this model, so it was ignored");
   }
 
+  let finalUrl = placeholder.url;
   if (placeholder.status !== "succeeded") {
     setStatus(
       "Generating — this can take anywhere from a few seconds to a couple minutes…" + (notes.length ? " (" + notes.join("; ") + ")" : "")
     );
-    await pollPrediction(data.id, (result) => upsertHistoryItem({ id: data.id, ...result }));
+    await pollPrediction(data.id, (result) => {
+      finalUrl = result.status === "succeeded" ? result.url : null;
+      upsertHistoryItem({ id: data.id, ...result });
+    });
   }
+
+  if (mode === "video" && finalUrl && els.addVideoAudio.checked) {
+    try {
+      setStatus("Adding matching audio…");
+      const audioUrls = await buildSceneAudioForVideo(1, 5);
+      setStatus("Lip-syncing audio to the video…");
+      const syncedUrl = await lipsyncOneScene(finalUrl, audioUrls[0]);
+      upsertHistoryItem({ id: data.id, url: syncedUrl, label: "Video with matching audio" });
+    } catch (err) {
+      setStatus(
+        "Video generated, but adding audio failed (" + (err.message || "unknown error") + "). The silent video is still saved.",
+        "error"
+      );
+      return;
+    }
+  }
+
   setStatus(notes.length ? "Done — " + notes.join("; ") + "." : "Done.", "success");
 }
 
@@ -613,6 +1024,39 @@ async function uploadFileToFal(file) {
   if (!putRes.ok) throw new Error(`Upload to fal's storage failed (${putRes.status}).`);
 
   return initData.fileUrl;
+}
+
+// Builds one audio clip per video scene, either from a narration script (via
+// TTS, chunked to roughly match scene count) or from an uploaded file (sliced
+// into segments for a storyboard, used as-is for a single short clip).
+// Shared by both single-shot "Add matching audio" and storyboard mode.
+async function buildSceneAudioForVideo(numScenes, perSceneSeconds) {
+  if (videoAudioSource === "upload") {
+    const file = els.videoAudioFile.files[0];
+    if (!file) throw new Error("Choose an audio file, or switch to writing a narration script.");
+    const url = await uploadFileToFal(file);
+    if (numScenes <= 1) return [url];
+    return await sliceSongIntoSegments(url, perSceneSeconds, numScenes);
+  }
+
+  const script = els.videoAudioScript.value.trim();
+  if (!script) throw new Error("Write a narration script, or switch to uploading an audio file.");
+  const voiceId = els.videoAudioVoiceManual.classList.contains("hidden") ? els.videoAudioVoice.value : els.videoAudioVoiceManual.value.trim();
+
+  const chunks = chunkScriptIntoScenes(script, numScenes);
+  if (chunks.length === 0) throw new Error("Couldn't split that script — check it has actual sentences.");
+
+  let audioError = null;
+  const audioUrls = await runWithConcurrency(chunks, 2, async (text) => {
+    try {
+      return await generateOneLine(text, voiceId);
+    } catch (err) {
+      if (!audioError) audioError = err.message;
+      return null;
+    }
+  });
+  if (audioError || audioUrls.some((u) => !u)) throw new Error(audioError || "One or more narration lines failed to generate.");
+  return audioUrls;
 }
 
 async function generateLipsync() {
@@ -873,11 +1317,45 @@ async function generateStoryboard() {
     return;
   }
 
+  let finalClipUrls = clipUrls;
+  let withAudio = false;
+  if (els.addVideoAudio.checked) {
+    try {
+      setStatus("Preparing matching audio for each scene…");
+      const audioUrls = await buildSceneAudioForVideo(scenes.length, 5);
+      if (audioUrls.length < scenes.length) {
+        throw new Error(`Only got ${audioUrls.length} audio segment(s) for ${scenes.length} scenes — try a longer script.`);
+      }
+      setStatus("Lip-syncing each scene to its audio…");
+      let syncError = null;
+      const syncedUrls = await runWithConcurrency(clipUrls.map((_, i) => i), 2, async (i) => {
+        try {
+          return await lipsyncOneScene(clipUrls[i], audioUrls[i]);
+        } catch (err) {
+          if (!syncError) syncError = `Scene ${i + 1} lip sync failed: ${err.message}`;
+          return null;
+        }
+      });
+      if (syncError || syncedUrls.some((u) => !u)) throw new Error(syncError || "One or more scenes failed to lip-sync.");
+      finalClipUrls = syncedUrls;
+      withAudio = true;
+    } catch (err) {
+      setStatus(
+        "Couldn't add matching audio (" + (err.message || "unknown error") + ") — continuing with a silent video instead.",
+        "error"
+      );
+    }
+  }
+
   setStatus("All scenes ready — stitching them into one video in your browser (this can take a few minutes)…");
   try {
-    const finalUrl = await stitchVideoClips(clipUrls, (progress) => {
-      setStatus(`Stitching… ${Math.round(progress * 100)}%`);
-    });
+    const finalUrl = await stitchVideoClips(
+      finalClipUrls,
+      (progress) => {
+        setStatus(`Stitching… ${Math.round(progress * 100)}%`);
+      },
+      { withAudio }
+    );
     els.storyboardProgress.classList.add("hidden");
     upsertHistoryItem({
       id: "storyboard-" + Date.now(),
@@ -894,7 +1372,7 @@ async function generateStoryboard() {
       "Scenes generated fine, but stitching them together in your browser failed (" +
         (err.message || "unknown error") +
         "). Here are the individual clip links so you can stitch them elsewhere: " +
-        clipUrls.join(" | "),
+        finalClipUrls.join(" | "),
       "error"
     );
   }
@@ -1151,6 +1629,221 @@ async function lipsyncOneScene(videoUrl, audioDataUrl) {
   }
 }
 
+// Splits a narration script into up to `targetScenes` chunks, preserving the
+// exact wording (no paraphrasing) and keeping sentences intact where
+// possible, so each chunk reads naturally when spoken and lip-synced to its
+// own scene clip.
+function chunkScriptIntoScenes(script, targetScenes) {
+  const sentences = script
+    .trim()
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (sentences.length === 0) return [];
+
+  const totalWords = sentences.reduce((n, s) => n + s.split(/\s+/).length, 0);
+  const perSceneWords = Math.max(1, Math.ceil(totalWords / Math.max(1, targetScenes)));
+
+  const chunks = [];
+  let current = [];
+  let currentWords = 0;
+  for (const sentence of sentences) {
+    const w = sentence.split(/\s+/).length;
+    if (current.length && currentWords + w > perSceneWords && chunks.length < targetScenes - 1) {
+      chunks.push(current.join(" "));
+      current = [];
+      currentWords = 0;
+    }
+    current.push(sentence);
+    currentWords += w;
+  }
+  if (current.length) chunks.push(current.join(" "));
+  return chunks;
+}
+
+// A handful of small variations on the same "Pip talking" scene so a full
+// narration video isn't just the same identical shot repeated — the
+// underlying framing/motion requirements (medium shot, continuous mouth
+// movement) stay fixed since those are what make lip sync work well.
+const NARRATION_SCENE_VARIATIONS = [
+  "looking up at a sky full of stars, pointing upward while he talks",
+  "gesturing warmly with his paws while he talks",
+  "nodding and smiling warmly while he talks",
+  "leaning in a little closer to the camera while he talks",
+];
+
+function buildNarrationScenePrompt(sceneIndex) {
+  const actionDetail = NARRATION_SCENE_VARIATIONS[sceneIndex % NARRATION_SCENE_VARIATIONS.length];
+  return (
+    `Pip the fox stands in a warm, cozy backyard at dusk, ${actionDetail}. ` +
+    "Medium shot, front-facing camera — his whole upper body and face are clearly visible, not a tight close-up, " +
+    "in the same friendly framing style as a preschool TV show. He's talking directly to the camera with warmth " +
+    "and enthusiasm, his mouth moving naturally and continuously in a clear speaking rhythm, expressive but gentle. " +
+    "He blinks naturally. Flat 2D cartoon animation style, soft rounded character design, bright warm color palette, " +
+    "simple clean background with soft shapes (a fence, some stars, a crescent moon), inviting and cheerful mood, " +
+    "no other characters in frame."
+  );
+}
+
+async function generateCartoonNarrationVideo() {
+  if (!cartoonCharacterUrl) {
+    setStatus("Generate a character design first.", "error");
+    return;
+  }
+  const script = els.cartoonScript.value.trim();
+  if (!script) {
+    setStatus("Write a narration script first.", "error");
+    return;
+  }
+
+  const totalSeconds = Number(els.cartoonLength.value);
+  const modelId = els.cartoonVideoModel.value;
+  const actionMotion = els.cartoonAction.value;
+  const perScene = 5;
+  const numScenes = Math.ceil(totalSeconds / perScene);
+
+  const voiceId = els.cartoonVoiceManual.classList.contains("hidden") ? els.cartoonVoice.value : els.cartoonVoiceManual.value.trim();
+
+  const chunks = chunkScriptIntoScenes(script, numScenes);
+  if (chunks.length === 0) {
+    setStatus("Couldn't split that script into scenes — check it has actual sentences.", "error");
+    return;
+  }
+
+  const progress = (label) => {
+    els.kidsProgress.classList.remove("hidden");
+    els.kidsProgress.innerHTML = `<div class="hint">${escapeHtml(label)}</div>`;
+  };
+  const renderChunkProgress = (label, statuses) => {
+    els.kidsProgress.innerHTML =
+      `<div class="hint">${escapeHtml(label)}</div>` +
+      chunks
+        .map((c, i) => {
+          const st = statuses[i] || "waiting";
+          const icon = st === "done" ? "✓" : st === "failed" ? "✕" : st === "working" ? "…" : "·";
+          return `<div class="hint">${icon} Scene ${i + 1}/${chunks.length}: ${escapeHtml(c.slice(0, 60))}</div>`;
+        })
+        .join("");
+  };
+
+  try {
+    // 1. Narration audio — one TTS clip per scene chunk (kept separate,
+    // rather than one long track sliced up, since each chunk is already the
+    // right length for its own scene).
+    const audioStatuses = chunks.map(() => "waiting");
+    renderChunkProgress("Generating narration audio…", audioStatuses);
+    setStatus(`Generating ${chunks.length} line(s) of narration…`);
+
+    let audioError = null;
+    const audioUrls = await runWithConcurrency(chunks, 2, async (text, i) => {
+      audioStatuses[i] = "working";
+      renderChunkProgress("Generating narration audio…", audioStatuses);
+      try {
+        const url = await generateOneLine(text, voiceId);
+        audioStatuses[i] = "done";
+        renderChunkProgress("Generating narration audio…", audioStatuses);
+        return url;
+      } catch (err) {
+        audioStatuses[i] = "failed";
+        renderChunkProgress("Generating narration audio…", audioStatuses);
+        if (!audioError) audioError = `Narration line ${i + 1} failed: ${err.message}`;
+        return null;
+      }
+    });
+    if (audioError || audioUrls.some((u) => !u)) throw new Error(audioError || "One or more narration lines failed.");
+
+    // 2. Animate the character for each scene.
+    const videoStatuses = chunks.map(() => "waiting");
+    renderChunkProgress("Animating character scenes…", videoStatuses);
+    setStatus(`Generating ${chunks.length} animated scene(s)…`);
+
+    let videoError = null;
+    const sceneVideoUrls = await runWithConcurrency(chunks, 2, async (_, i) => {
+      videoStatuses[i] = "working";
+      renderChunkProgress("Animating character scenes…", videoStatuses);
+      try {
+        const res = await fetch("/api/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            modelId,
+            prompt: buildNarrationScenePrompt(i),
+            style: "cartoon",
+            startImage: cartoonCharacterUrl,
+            actionMotion,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Scene animation was rejected.");
+        let url = data.status === "succeeded" ? (Array.isArray(data.output) ? data.output[0] : data.output) : null;
+        if (!url) {
+          const result = await pollPredictionPromise(data.id);
+          if (result.status !== "succeeded") throw new Error(result.error || "Scene animation failed.");
+          url = result.url;
+        }
+        videoStatuses[i] = "done";
+        renderChunkProgress("Animating character scenes…", videoStatuses);
+        return url;
+      } catch (err) {
+        videoStatuses[i] = "failed";
+        renderChunkProgress("Animating character scenes…", videoStatuses);
+        if (!videoError) videoError = `Scene ${i + 1} animation failed: ${err.message}`;
+        return null;
+      }
+    });
+    if (videoError || sceneVideoUrls.some((u) => !u)) throw new Error(videoError || "One or more scenes failed to animate.");
+
+    // 3. Lip-sync each scene to its own narration line.
+    const syncStatuses = chunks.map(() => "waiting");
+    renderChunkProgress("Lip-syncing each scene…", syncStatuses);
+    setStatus("Lip-syncing each scene to its narration line…");
+
+    let syncError = null;
+    const syncedUrls = await runWithConcurrency(chunks.map((_, i) => i), 2, async (i) => {
+      syncStatuses[i] = "working";
+      renderChunkProgress("Lip-syncing each scene…", syncStatuses);
+      try {
+        const url = await lipsyncOneScene(sceneVideoUrls[i], audioUrls[i]);
+        syncStatuses[i] = "done";
+        renderChunkProgress("Lip-syncing each scene…", syncStatuses);
+        return url;
+      } catch (err) {
+        syncStatuses[i] = "failed";
+        renderChunkProgress("Lip-syncing each scene…", syncStatuses);
+        if (!syncError) syncError = `Scene ${i + 1} lip sync failed: ${err.message}`;
+        return null;
+      }
+    });
+    if (syncError || syncedUrls.some((u) => !u)) {
+      throw new Error(
+        (syncError || "One or more scenes failed to lip-sync.") +
+          " The animated (silent) scenes are still available: " +
+          sceneVideoUrls.join(" | ")
+      );
+    }
+
+    // 4. Stitch the lip-synced scenes into one final video.
+    setStatus("Stitching the final video together…");
+    const finalUrl = await stitchVideoClips(syncedUrls, (p) => setStatus(`Stitching… ${Math.round(p * 100)}%`), {
+      withAudio: true,
+    });
+
+    els.kidsProgress.classList.add("hidden");
+    upsertHistoryItem({
+      id: "cartoon-narration-" + Date.now(),
+      prompt: script.slice(0, 120),
+      label: "Cartoon narration video",
+      kind: "video",
+      status: "succeeded",
+      url: finalUrl,
+      isBrowserStitched: true,
+    });
+    setStatus("Done — download it from the gallery before refreshing the page.", "success");
+  } catch (err) {
+    setStatus(err.message || "Something went wrong.", "error");
+  }
+}
+
 async function generateCartoonSongVideo() {
   if (!cartoonCharacterUrl) {
     setStatus("Generate a character design first.", "error");
@@ -1323,6 +2016,7 @@ els.generateBtn.addEventListener("click", async () => {
   try {
     if (mode === "lipsync") await generateLipsync();
     else if (mode === "kids" && kidsSubMode === "song") await generateKidsSong();
+    else if (mode === "kids" && kidsSubMode === "cartoon" && cartoonContentType === "narration") await generateCartoonNarrationVideo();
     else if (mode === "kids" && kidsSubMode === "cartoon") await generateCartoonSongVideo();
     else if (mode === "kids") await generateKidsStory();
     else if (isStoryboard()) await generateStoryboard();
@@ -1341,4 +2035,6 @@ els.clearBtn.addEventListener("click", () => {
 });
 
 applyModeUI();
+applyCartoonContentTypeUI();
+applyVideoAudioSourceUI();
 renderGallery();
