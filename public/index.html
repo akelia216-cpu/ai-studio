@@ -244,6 +244,7 @@
             <div class="mode-toggle small" role="tablist">
               <button class="cartoon-content-btn active" data-cartooncontent="song" type="button">Song</button>
               <button class="cartoon-content-btn" data-cartooncontent="narration" type="button">Narration (spoken)</button>
+              <button class="cartoon-content-btn" data-cartooncontent="dialogue" type="button">Dialogue (2 characters)</button>
             </div>
 
             <div id="cartoonSongFields">
@@ -270,6 +271,100 @@
               </label>
             </div>
 
+            <div id="cartoonDialogueFields" class="hidden">
+              <div class="character-panel">
+                <h4>Character 1</h4>
+                <label class="field">
+                  <span>Name (used to label their lines in the script)</span>
+                  <input type="text" id="dialogueChar1Name" placeholder="e.g. Pip" />
+                </label>
+                <div class="two-col">
+                  <label class="field">
+                    <span>Default expression (required)</span>
+                    <input type="file" id="dialogueChar1ImgDefault" accept="image/*" />
+                  </label>
+                  <label class="field">
+                    <span>Happy expression (optional)</span>
+                    <input type="file" id="dialogueChar1ImgHappy" accept="image/*" />
+                  </label>
+                </div>
+                <label class="field">
+                  <span>Surprised expression (optional)</span>
+                  <input type="file" id="dialogueChar1ImgSurprised" accept="image/*" />
+                </label>
+                <span class="hint">Tag a line like "Pip (happy): ..." to use that expression for that line instead of the default.</span>
+
+                <div class="mode-toggle small" role="tablist">
+                  <button class="dialogue-voice-source-btn active" data-char="1" data-voicesource="preset" type="button">Preset voice</button>
+                  <button class="dialogue-voice-source-btn" data-char="1" data-voicesource="clone" type="button">Clone a voice</button>
+                </div>
+                <div id="dialogueChar1PresetVoice">
+                  <label class="field">
+                    <span>Voice</span>
+                    <select id="dialogueChar1Voice"></select>
+                    <input type="text" id="dialogueChar1VoiceManual" class="hidden" placeholder="e.g. cute_boy" />
+                  </label>
+                </div>
+                <div id="dialogueChar1CloneVoice" class="hidden">
+                  <label class="field">
+                    <span>Voice sample (~1 minute of clear speech)</span>
+                    <input type="file" id="dialogueChar1CloneFile" accept="audio/*" />
+                  </label>
+                  <button id="dialogueChar1CloneBtn" class="text-btn enhance-btn" type="button">🎙️ Clone this voice</button>
+                  <span class="hint" id="dialogueChar1CloneStatus"></span>
+                </div>
+              </div>
+
+              <div class="character-panel">
+                <h4>Character 2</h4>
+                <label class="field">
+                  <span>Name (used to label their lines in the script)</span>
+                  <input type="text" id="dialogueChar2Name" placeholder="e.g. Robin" />
+                </label>
+                <div class="two-col">
+                  <label class="field">
+                    <span>Default expression (required)</span>
+                    <input type="file" id="dialogueChar2ImgDefault" accept="image/*" />
+                  </label>
+                  <label class="field">
+                    <span>Happy expression (optional)</span>
+                    <input type="file" id="dialogueChar2ImgHappy" accept="image/*" />
+                  </label>
+                </div>
+                <label class="field">
+                  <span>Surprised expression (optional)</span>
+                  <input type="file" id="dialogueChar2ImgSurprised" accept="image/*" />
+                </label>
+                <span class="hint">Tag a line like "Robin (surprised): ..." to use that expression for that line instead of the default.</span>
+
+                <div class="mode-toggle small" role="tablist">
+                  <button class="dialogue-voice-source-btn active" data-char="2" data-voicesource="preset" type="button">Preset voice</button>
+                  <button class="dialogue-voice-source-btn" data-char="2" data-voicesource="clone" type="button">Clone a voice</button>
+                </div>
+                <div id="dialogueChar2PresetVoice">
+                  <label class="field">
+                    <span>Voice</span>
+                    <select id="dialogueChar2Voice"></select>
+                    <input type="text" id="dialogueChar2VoiceManual" class="hidden" placeholder="e.g. Wise_Woman" />
+                  </label>
+                </div>
+                <div id="dialogueChar2CloneVoice" class="hidden">
+                  <label class="field">
+                    <span>Voice sample (~1 minute of clear speech)</span>
+                    <input type="file" id="dialogueChar2CloneFile" accept="audio/*" />
+                  </label>
+                  <button id="dialogueChar2CloneBtn" class="text-btn enhance-btn" type="button">🎙️ Clone this voice</button>
+                  <span class="hint" id="dialogueChar2CloneStatus"></span>
+                </div>
+              </div>
+
+              <label class="field">
+                <span>Dialogue script</span>
+                <textarea id="dialogueScript" rows="8" placeholder="Pip: Did you hear that noise?&#10;Robin (surprised): I think it came from the attic!&#10;Pip: Should we go check it out?"></textarea>
+                <span class="hint">One line per character turn, formatted "Name: line" or "Name (expression): line". Each line becomes its own ~5-second scene, so the video's length is however many lines you write — about 12 lines per minute.</span>
+              </label>
+            </div>
+
             <div class="two-col">
               <label class="field">
                 <span>Video model</span>
@@ -292,7 +387,7 @@
               </label>
             </div>
 
-            <label class="field">
+            <div id="cartoonLengthField" class="field">
               <span>Length</span>
               <select id="cartoonLength">
                 <option value="30" selected>30 seconds</option>
@@ -306,7 +401,7 @@
                 <option value="420">7 minutes</option>
               </select>
               <span class="hint">Builds ~1 scene per 5 seconds, animates each with the character, lip-syncs each scene to its own audio, then stitches it all into one video. Expect several minutes and roughly (scene count) × (video + lip-sync cost) — start with 30s the first time.</span>
-            </label>
+            </div>
           </div>
 
           <div id="kidsProgress" class="hidden"></div>
