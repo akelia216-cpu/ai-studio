@@ -354,9 +354,15 @@
               </div>
 
               <label class="field">
-                <span>Both characters together (optional reference image)</span>
-                <input type="file" id="dialogueBothImage" accept="image/*" />
-                <span class="hint">A single image with both characters in frame together, used for "(both)"-tagged lines and "[Both: ...]" beats below — only needed if your script uses those.</span>
+                <span>Both characters together (Character 1 speaking)</span>
+                <input type="file" id="dialogueBothImage1" accept="image/*" />
+                <span class="hint">A reference image with both characters in frame together, framed so Character 1 (the speaker) is clearly face-visible for lip-sync. Used for "(both)"-tagged lines where Character 1 is speaking, and as the default for "[Both: ...]" silent beats.</span>
+              </label>
+
+              <label class="field">
+                <span>Both characters together (Character 2 speaking)</span>
+                <input type="file" id="dialogueBothImage2" accept="image/*" />
+                <span class="hint">Same idea, but framed so Character 2 (the speaker) is clearly face-visible instead. Used for "(both)"-tagged lines where Character 2 is speaking. Optional — if you only upload the Character 1 version above, that single image is used for every "both" scene regardless of who's speaking.</span>
               </label>
 
               <label class="field">
