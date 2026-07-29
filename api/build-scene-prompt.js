@@ -10,16 +10,38 @@
 // It can also pick which of the character's uploaded expression images best
 // fits a line that wasn't explicitly tagged in the script (availableExpressions),
 // can write a non-verbal "acting only, no talking" scene instead of a spoken
-// one (nonVerbal) for silent beats, and now also picks a camera movement per
-// scene from the app's existing CAMERA_PRESETS list — including favoring a
-// zoom-out/dolly-out reveal specifically for "both characters together"
-// scenes (bothScene), since that's the one shot type only possible when the
+// one (nonVerbal) for silent beats, and picks a camera movement per scene
+// from the app's CAMERA_PRESETS list — favoring a zoom-out/dolly-out reveal
+// for "both characters together" scenes (bothScene) that AREN'T also
+// getting lip-synced, since that's the one shot type only possible when the
 // starting reference image already has both characters in it.
+//
+// Camera motion and lip-sync do NOT mix safely: a zoom-out, dolly-out, or
+// orbit shot can leave a speaking character's face small, angled away, or
+// out of frame by the end of the clip, which fails lip-sync's face
+// detection — this was confirmed as a real, repeatable failure (not a
+// one-off) across THREE separate scenes and on BOTH lip-sync engines
+// (LatentSync and native Kling), ruling out the engine as the cause. A soft
+// "please avoid this" instruction to the LLM wasn't reliable enough to stop
+// it happening again, so this is now a HARD constraint: for any scene that
+// will actually be lip-synced (any non-silent line — solo or the speaking
+// half of a "both" scene), the risky motions are removed from the candidate
+// list given to the LLM entirely, and the parsed response is re-validated
+// server-side against that same restricted list, falling back to "none" if
+// the model somehow returns one anyway. Only a scene with NO lip-sync at
+// all (a silent `[Name: action]` or `[Both: action]` beat) gets the full
+// camera-motion list, including the reveal-shot options.
 const { callLLM } = require("./_llm");
 const { CAMERA_PRESETS } = require("./_models");
 
 const DEFAULT_STYLE = "flat 2D cartoon animation style, soft rounded character design, bright warm color palette";
 const CAMERA_KEYS = Object.keys(CAMERA_PRESETS);
+
+// The only camera moves allowed on a scene that will be lip-synced — no
+// zoom-out, dolly-out, or orbit, since those are the ones observed to break
+// face detection by the end of the clip. Filtered against CAMERA_KEYS so a
+// future rename/removal in _models.js can't silently offer a stale key.
+const LIPSYNC_SAFE_CAMERA_KEYS = ["none", "zoom-in", "pan-left", "pan-right"].filter((k) => CAMERA_KEYS.includes(k));
 
 function buildInstruction({ hasExpressionList, nonVerbal, bothScene }) {
   const talkingRule = nonVerbal
@@ -36,48 +58,41 @@ function buildInstruction({ hasExpressionList, nonVerbal, bothScene }) {
       "feelings.\n"
     : "";
 
-  const cameraList = CAMERA_KEYS.map((k) => `${k} (${CAMERA_PRESETS[k].label})`).join(", ");
+  // Whether this scene gets lip-synced at all — true for ANY spoken line,
+  // whether solo or the speaking half of a "both" scene. Silent beats
+  // (nonVerbal) never lip-sync, regardless of bothScene.
+  const willLipSync = !nonVerbal;
+  const availableCameraKeys = willLipSync ? LIPSYNC_SAFE_CAMERA_KEYS : CAMERA_KEYS;
+  const cameraList = availableCameraKeys.map((k) => `${k} (${CAMERA_PRESETS[k].label})`).join(", ");
 
-  // A scene only gets lip-synced afterward if someone is actually speaking in
-  // it — a silent/non-verbal beat has no audio to sync, so the face-framing
-  // constraint below doesn't apply to it at all. When someone IS speaking,
-  // the face-detection step in lip-sync needs their face clearly visible in
-  // the frame at the END of the clip too, not just the start — a zoom-out,
-  // dolly-out, or orbit that leaves the speaker's face small, angled away, or
-  // partially out of frame by the end of the shot will make lip-sync fail
-  // even though the earlier part of the clip looked fine.
-  const speakerFaceRule = nonVerbal
-    ? ""
-    : bothScene
-    ? "IMPORTANT — lip-sync safety: this line gets lip-synced afterward, so the SPEAKING character's face must stay " +
-      "clearly visible, reasonably large, and roughly facing the camera for the ENTIRE shot, including the very end " +
-      "— never let their face end up small, angled away, or partially out of frame. This restriction is ONLY about " +
-      "the speaking character, though: the other (non-speaking) character in frame doesn't need to stay " +
-      "face-visible, so a pull-back/reveal shot is still fine as long as it's the speaker staying framed, not the " +
-      "other character.\n"
-    : "IMPORTANT — lip-sync safety: this line gets lip-synced afterward, so the character's face must stay clearly " +
-      "visible, reasonably large, and roughly facing the camera for the ENTIRE shot, including the very end — never " +
-      "let their face end up small, angled away, or partially out of frame by the end of the clip.\n";
-
-  const cameraRule = bothScene
-    ? `Also choose ONE camera movement from this list (by key): ${cameraList}. Since the starting reference image ` +
-      "already shows BOTH characters together, this scene is a good candidate for \"zoom-out\" or \"dolly-out\" — " +
-      "starting close on the speaker and pulling back to reveal the other character reacting — when the moment " +
-      'actually calls for that kind of reveal. Don\'t force it though: pick "none" or another movement if a static ' +
-      "or simpler shot fits better." +
-      (nonVerbal
-        ? "\n"
-        : " Just make sure whichever movement you pick still keeps the SPEAKING character's face framed and " +
-          "readable throughout, per the lip-sync safety rule above — the reveal is about uncovering the other " +
-          "character, not about losing the speaker.\n")
-    : `Also choose ONE camera movement from this list (by key): ${cameraList}. The starting reference image only ` +
+  let cameraRule;
+  if (willLipSync) {
+    // Hard-restricted list — no reveal/pull-back options exist here at all,
+    // so there's nothing to warn the model away from; it can only pick from
+    // what's actually offered. This applies even to a "(both)"-tagged
+    // speaking line: the SPEAKER still needs to survive lip-sync, so that
+    // scene doesn't get the reveal treatment either — only a fully silent
+    // "[Both: action]" beat (nonVerbal, handled below) still gets it.
+    cameraRule =
+      `Also choose ONE camera movement from this list (by key): ${cameraList}. This is the FULL list of allowed ` +
+      "movements for this scene — no other options exist, because this line gets lip-synced afterward and a " +
+      "zoom-out, dolly-out, or orbit risks leaving the speaking character's face too small, turned away, or out of " +
+      'frame by the end of the shot, which breaks lip-sync. Pick "none" for a static shot unless a simple zoom-in ' +
+      "or gentle pan clearly fits the moment — every option in the list keeps the character's face clearly readable " +
+      "throughout.\n";
+  } else if (bothScene) {
+    cameraRule =
+      `Also choose ONE camera movement from this list (by key): ${cameraList}. Since the starting reference image ` +
+      "already shows BOTH characters together AND this beat is silent (nothing gets lip-synced here), this scene " +
+      'is a good candidate for "zoom-out" or "dolly-out" — starting close on one character and pulling back to ' +
+      'reveal the other reacting — when the moment actually calls for that kind of reveal. Pick "none" or another ' +
+      "movement if a static or simpler shot fits better.\n";
+  } else {
+    cameraRule =
+      `Also choose ONE camera movement from this list (by key): ${cameraList}. The starting reference image only ` +
       "shows this one character alone, so do NOT choose a movement that implies revealing or panning to another " +
-      'character who isn\'t in frame — pick "none" for a static shot unless a simple push/pan/zoom clearly fits.' +
-      (nonVerbal
-        ? "\n"
-        : " Zoom-out, dolly-out, and orbit are only safe here if the character's face stays clearly readable " +
-          "throughout per the lip-sync safety rule above — if you're not sure a movement keeps the face readable " +
-          'the whole way through, prefer "zoom-in", "none", or a gentle pan instead.\n');
+      'character who isn\'t in frame — pick "none" for a static shot unless a simple push/pan/zoom clearly fits.\n';
+  }
 
   return (
     "You write ONE vivid prompt for an AI image-to-video model that animates one or two cartoon characters from a " +
@@ -95,7 +110,6 @@ function buildInstruction({ hasExpressionList, nonVerbal, bothScene }) {
       ? "; the other character is visibly present in frame too, reacting to what's happening but not talking.\n"
       : "; no other characters in frame.\n") +
     expressionRule +
-    speakerFaceRule +
     cameraRule +
     "\n" +
     "Respond in EXACTLY this format (nothing else, one line each except PROMPT which is the final 3-5 sentences):\n" +
@@ -105,7 +119,7 @@ function buildInstruction({ hasExpressionList, nonVerbal, bothScene }) {
   );
 }
 
-function parseReply(text, hasExpressionList) {
+function parseReply(text, hasExpressionList, allowedCameraKeys) {
   const promptMatch = text.match(/PROMPT:\s*([\s\S]+)/i);
   if (!promptMatch) {
     // The model didn't follow the format — fall back to treating the whole
@@ -120,7 +134,13 @@ function parseReply(text, hasExpressionList) {
   return {
     prompt: promptMatch[1].replace(/^"|"$/g, "").trim(),
     matchedExpression: hasExpressionList && exprMatch ? exprMatch[1].trim().toLowerCase().replace(/^"|"$/g, "") : null,
-    cameraMotion: CAMERA_KEYS.includes(rawCamera) ? rawCamera : "none",
+    // Re-validated against the SAME restricted list the model was given for
+    // this scene (not the full CAMERA_KEYS) — this is what makes the
+    // restriction an actual hard constraint rather than just a shorter
+    // suggestion: even if the model ignores its instructions and names a
+    // disallowed key (e.g. "zoom-out" on a lip-synced scene), it gets
+    // overridden to "none" here rather than passed through to /api/generate.
+    cameraMotion: allowedCameraKeys.includes(rawCamera) ? rawCamera : "none",
   };
 }
 
@@ -163,6 +183,8 @@ module.exports = async function handler(req, res) {
   }
 
   const hasExpressionList = Array.isArray(availableExpressions) && availableExpressions.length > 0;
+  const willLipSync = !nonVerbal;
+  const allowedCameraKeys = willLipSync ? LIPSYNC_SAFE_CAMERA_KEYS : CAMERA_KEYS;
 
   const userTextParts = [`Character: ${characterName}${characterDescription ? ` — ${characterDescription}` : ""}`];
   if (expression && expression !== "default") userTextParts.push(`Current/tagged expression: ${expression}`);
@@ -179,7 +201,7 @@ module.exports = async function handler(req, res) {
   try {
     const instruction = buildInstruction({ hasExpressionList, nonVerbal: !!nonVerbal, bothScene: !!bothScene });
     const reply = await callLLM(token, instruction, userTextParts.join("\n"), 340);
-    const { prompt, matchedExpression, cameraMotion } = parseReply(reply, hasExpressionList);
+    const { prompt, matchedExpression, cameraMotion } = parseReply(reply, hasExpressionList, allowedCameraKeys);
     if (!prompt) throw new Error("The model returned an empty scene prompt.");
     res.status(200).json({ prompt, matchedExpression, cameraMotion });
   } catch (err) {
