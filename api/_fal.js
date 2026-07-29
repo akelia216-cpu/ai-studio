@@ -53,13 +53,19 @@ async function getInputSchema(token, endpointId) {
     const doc = await safeReadJson(res);
     if (doc.__empty || doc.__unparsed) throw new Error("schema response was not valid JSON");
     const { properties, required } = extractInputSchema(doc);
-    const entry = { properties, required, fetchedAt: Date.now() };
+    // The raw doc is kept alongside the extracted top-level fields (not just
+    // properties/required) so callers can resolve a NESTED object property's
+    // own sub-schema afterward — e.g. Minimax's speech-02-hd doesn't expose
+    // "voice_id" at the top level at all; it lives at
+    // "voice_setting.voice_id". Without the raw doc there'd be no way to
+    // follow that property's $ref after the fact. See resolveNestedProperty.
+    const entry = { properties, required, fetchedAt: Date.now(), doc };
     schemaCache.set(endpointId, entry);
     return entry;
   } catch {
     // If we can't introspect the schema, callers just fall back to sending
     // only the fields they're confident about (usually just "prompt").
-    const fallback = { properties: {}, required: [], fetchedAt: Date.now(), unavailable: true };
+    const fallback = { properties: {}, required: [], fetchedAt: Date.now(), unavailable: true, doc: null };
     schemaCache.set(endpointId, fallback);
     return fallback;
   }
@@ -72,6 +78,23 @@ function firstSupportedField(schema, candidates) {
     }
   }
   return null;
+}
+
+// Resolves a top-level property's own sub-schema (following its $ref, if
+// any) using the raw doc a getInputSchema() result carries alongside its
+// flattened properties/required. Returns null if the property doesn't
+// exist, isn't an object schema, or the raw doc isn't available (e.g. the
+// schema fetch itself failed and getInputSchema returned its empty
+// fallback). Needed for any model — like Minimax's speech-02-hd — whose
+// real field of interest is nested inside an object property rather than
+// declared flat at the top level.
+function resolveNestedProperty(schemaEntry, propName) {
+  if (!schemaEntry || !schemaEntry.doc || !schemaEntry.properties) return null;
+  let propSchema = schemaEntry.properties[propName];
+  if (!propSchema) return null;
+  if (propSchema.$ref) propSchema = resolveRef(schemaEntry.doc, propSchema.$ref);
+  if (!propSchema || !propSchema.properties) return null;
+  return { properties: propSchema.properties, required: propSchema.required || [] };
 }
 
 // Reads a response body defensively — fal occasionally returns an empty or
@@ -285,4 +308,4 @@ function stringifyError(err) {
   return String(err);
 }
 
-module.exports = { getInputSchema, firstSupportedField, createPrediction, getPrediction };
+module.exports = { getInputSchema, firstSupportedField, resolveNestedProperty, createPrediction, getPrediction };
