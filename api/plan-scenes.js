@@ -97,7 +97,10 @@ module.exports = async function handler(req, res) {
       return;
     }
 
-    // Trim/pad to the requested count so the client always knows what to expect.
+    // Trim down to the requested count if the model overshot — it's fine if
+    // it undershoots instead (returns fewer scenes than asked); every caller
+    // already derives its scene count from the returned array's actual
+    // length rather than assuming it matches numScenes exactly.
     const finalScenes = scenes.slice(0, numScenes);
 
     res.status(200).json({ scenes: finalScenes, perSceneSeconds: perScene });
