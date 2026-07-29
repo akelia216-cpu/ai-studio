@@ -65,7 +65,8 @@ const els = {
   cartoonBackgroundDescription: document.getElementById("cartoonBackgroundDescription"),
   dialogueVoiceSourceBtns: document.querySelectorAll(".dialogue-voice-source-btn"),
   dialogueScript: document.getElementById("dialogueScript"),
-  dialogueBothImage: document.getElementById("dialogueBothImage"),
+  dialogueBothImage1: document.getElementById("dialogueBothImage1"),
+  dialogueBothImage2: document.getElementById("dialogueBothImage2"),
   dialogueChar1Name: document.getElementById("dialogueChar1Name"),
   dialogueChar1ImgDefault: document.getElementById("dialogueChar1ImgDefault"),
   dialogueChar1ExtraExpressions: document.getElementById("dialogueChar1ExtraExpressions"),
@@ -2341,8 +2342,16 @@ async function generateCartoonDialogueVideo() {
   // (rather than per-line) — Default plus however many custom-named
   // expressions were added — and fall back to the character's default image
   // for any expression tag that wasn't uploaded (typo, or just not covered).
+  // Two together-images are supported — one framed so Character 1 stays
+  // face-visible (for lines where Character 1 is the speaker), one framed for
+  // Character 2 — because a single static two-character shot can't fairly
+  // keep BOTH characters' faces lip-sync-sized at once; whichever one is
+  // smaller/further back in a shared image will fail face detection when
+  // they're the one actually talking. Uploading only one is still supported
+  // (backward compatible) — it's just used for every "both" scene regardless
+  // of who's speaking.
   let charImages;
-  let togetherImage = null;
+  let togetherImages = { 1: null, 2: null };
   try {
     setStatus("Preparing character images…");
     charImages = { 1: {}, 2: {} };
@@ -2352,24 +2361,43 @@ async function generateCartoonDialogueVideo() {
         charImages[charNum][name] = await fileToResizedDataURL(file);
       }
     }
-    if (els.dialogueBothImage.files[0]) {
-      togetherImage = await fileToResizedDataURL(els.dialogueBothImage.files[0]);
+    if (els.dialogueBothImage1.files[0]) {
+      togetherImages[1] = await fileToResizedDataURL(els.dialogueBothImage1.files[0]);
+    }
+    if (els.dialogueBothImage2.files[0]) {
+      togetherImages[2] = await fileToResizedDataURL(els.dialogueBothImage2.files[0]);
     }
   } catch (err) {
     setStatus("Couldn't read one of the character images: " + (err.message || "unknown error"), "error");
     return;
   }
 
-  // A "(both)"-tagged line or a "[Both: ...]" beat needs the together image —
-  // check this before spending any generation calls, same reasoning as the
-  // expression-tag check below.
-  if (!togetherImage && lines.some((l) => l.bothScene)) {
-    setStatus('Upload the "Both characters together" reference image first — your script uses "(both)" or "[Both: ...]".', "error");
+  // A "(both)"-tagged line or a "[Both: ...]" beat needs at least one
+  // together image — check this before spending any generation calls, same
+  // reasoning as the expression-tag check below.
+  if (!togetherImages[1] && !togetherImages[2] && lines.some((l) => l.bothScene)) {
+    setStatus(
+      'Upload at least one "Both characters together" reference image first — your script uses "(both)" or "[Both: ...]".',
+      "error"
+    );
     return;
   }
 
+  // Which together-image to use for a "both" scene: match the actual
+  // speaker's version when available, falling back to whichever one WAS
+  // uploaded if only one exists. A "[Both: ...]" silent beat has no speaker
+  // to match, so it defaults to the Character 1 version for consistency.
+  const togetherImageFor = (charNum) => {
+    if (charNum === 1) return togetherImages[1] || togetherImages[2] || null;
+    if (charNum === 2) return togetherImages[2] || togetherImages[1] || null;
+    return togetherImages[1] || togetherImages[2] || null; // "both" (silent beat, no speaker)
+  };
+
   const imageFor = (charNum, expr, bothScene) => {
-    if (bothScene && togetherImage) return togetherImage;
+    if (bothScene) {
+      const together = togetherImageFor(charNum);
+      if (together) return together;
+    }
     return charImages[charNum][expr] || charImages[charNum].default;
   };
   const nameFor = (charNum) => (charNum === "both" ? `${char1Name} and ${char2Name}` : charNum === 1 ? char1Name : char2Name);
