@@ -167,6 +167,21 @@
           <span class="hint">Keep clips short (a few seconds) — large files may fail to upload on the free hosting tier.</span>
         </div>
 
+        <!-- Shared lip-sync engine choice — used here AND by every Kids &
+             Songs pipeline (Narration/Dialogue/Song) that lip-syncs a scene,
+             so this one control governs lip-sync quality app-wide. Hidden
+             only in plain Image mode, where nothing gets lip-synced. -->
+        <div id="lipsyncModelField">
+          <label class="field">
+            <span>Lip-sync engine</span>
+            <select id="lipsyncModel">
+              <option value="kling">Kling native lip-sync (recommended)</option>
+              <option value="latentsync">LatentSync (original)</option>
+            </select>
+            <span class="hint">Kling is fal's newer, native lip-sync model — generally sharper results, but it has real format limits: source clip must be .mp4/.mov, 2-10 seconds long, 720p or 1080p, under 100MB; the audio must be 2-60 seconds and under 5MB. LatentSync has looser limits but is the older/original model. This applies to every mode that lip-syncs a scene, not just the plain Lip Sync tab.</span>
+          </label>
+        </div>
+
         <!-- Kids content: spoken story with multiple voices, or a song -->
         <div id="kidsControls" class="hidden">
           <div class="mode-toggle small" role="tablist">
