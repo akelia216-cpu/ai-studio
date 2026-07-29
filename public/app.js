@@ -39,7 +39,12 @@ const els = {
   adultVoice: document.getElementById("adultVoice"),
   kidVoiceManual: document.getElementById("kidVoiceManual"),
   adultVoiceManual: document.getElementById("adultVoiceManual"),
+  kidVoicePreviewBtn: document.getElementById("kidVoicePreviewBtn"),
+  kidVoicePreviewStatus: document.getElementById("kidVoicePreviewStatus"),
+  adultVoicePreviewBtn: document.getElementById("adultVoicePreviewBtn"),
+  adultVoicePreviewStatus: document.getElementById("adultVoicePreviewStatus"),
   voiceListHint: document.getElementById("voiceListHint"),
+  voicePreviewPlayer: document.getElementById("voicePreviewPlayer"),
   songLyrics: document.getElementById("songLyrics"),
   songStyle: document.getElementById("songStyle"),
   songVoice: document.getElementById("songVoice"),
@@ -58,6 +63,8 @@ const els = {
   cartoonScript: document.getElementById("cartoonScript"),
   cartoonVoice: document.getElementById("cartoonVoice"),
   cartoonVoiceManual: document.getElementById("cartoonVoiceManual"),
+  cartoonVoicePreviewBtn: document.getElementById("cartoonVoicePreviewBtn"),
+  cartoonVoicePreviewStatus: document.getElementById("cartoonVoicePreviewStatus"),
   cartoonVideoModel: document.getElementById("cartoonVideoModel"),
   cartoonAction: document.getElementById("cartoonAction"),
   cartoonLength: document.getElementById("cartoonLength"),
@@ -75,6 +82,8 @@ const els = {
   dialogueChar1CloneVoice: document.getElementById("dialogueChar1CloneVoice"),
   dialogueChar1Voice: document.getElementById("dialogueChar1Voice"),
   dialogueChar1VoiceManual: document.getElementById("dialogueChar1VoiceManual"),
+  dialogueChar1VoicePreviewBtn: document.getElementById("dialogueChar1VoicePreviewBtn"),
+  dialogueChar1VoicePreviewStatus: document.getElementById("dialogueChar1VoicePreviewStatus"),
   dialogueChar1CloneFile: document.getElementById("dialogueChar1CloneFile"),
   dialogueChar1CloneBtn: document.getElementById("dialogueChar1CloneBtn"),
   dialogueChar1CloneStatus: document.getElementById("dialogueChar1CloneStatus"),
@@ -86,6 +95,8 @@ const els = {
   dialogueChar2CloneVoice: document.getElementById("dialogueChar2CloneVoice"),
   dialogueChar2Voice: document.getElementById("dialogueChar2Voice"),
   dialogueChar2VoiceManual: document.getElementById("dialogueChar2VoiceManual"),
+  dialogueChar2VoicePreviewBtn: document.getElementById("dialogueChar2VoicePreviewBtn"),
+  dialogueChar2VoicePreviewStatus: document.getElementById("dialogueChar2VoicePreviewStatus"),
   dialogueChar2CloneFile: document.getElementById("dialogueChar2CloneFile"),
   dialogueChar2CloneBtn: document.getElementById("dialogueChar2CloneBtn"),
   dialogueChar2CloneStatus: document.getElementById("dialogueChar2CloneStatus"),
@@ -106,6 +117,8 @@ const els = {
   videoAudioScript: document.getElementById("videoAudioScript"),
   videoAudioVoice: document.getElementById("videoAudioVoice"),
   videoAudioVoiceManual: document.getElementById("videoAudioVoiceManual"),
+  videoAudioVoicePreviewBtn: document.getElementById("videoAudioVoicePreviewBtn"),
+  videoAudioVoicePreviewStatus: document.getElementById("videoAudioVoicePreviewStatus"),
   videoAudioFile: document.getElementById("videoAudioFile"),
   cameraMotion: document.getElementById("cameraMotion"),
   startImage: document.getElementById("startImage"),
@@ -1256,6 +1269,56 @@ async function generateOneLine(text, voiceId) {
     return await attempt(); // one retry
   }
 }
+
+// ---------- Voice preview (hear a short sample of the selected voice) ----------
+
+const VOICE_PREVIEW_TEXT = "Hi there! This is what my voice sounds like.";
+
+// Every voice picker in the app is a select+manual-text-input pair (see
+// ensureVoicesLoaded) plus, now, its own "Preview" button and status span
+// right next to it — wired generically here by id prefix rather than
+// duplicating the same click handler six times.
+const VOICE_PREVIEW_TARGETS = [
+  "kidVoice",
+  "adultVoice",
+  "cartoonVoice",
+  "videoAudioVoice",
+  "dialogueChar1Voice",
+  "dialogueChar2Voice",
+];
+
+function wireVoicePreview(key) {
+  const selectEl = els[key];
+  const manualEl = els[`${key}Manual`];
+  const btn = els[`${key}PreviewBtn`];
+  const status = els[`${key}PreviewStatus`];
+  if (!selectEl || !manualEl || !btn || !status) return;
+
+  btn.addEventListener("click", async () => {
+    const voiceId = manualEl.classList.contains("hidden") ? selectEl.value : manualEl.value.trim();
+    if (!voiceId) {
+      status.textContent = "Pick or type a voice first.";
+      return;
+    }
+    btn.disabled = true;
+    status.textContent = "Generating preview…";
+    try {
+      // Reuses the exact same /api/tts call every line of dialogue already
+      // goes through (generateOneLine, defined just above) — a preview is
+      // just a short TTS line with no special-cased endpoint of its own.
+      const url = await generateOneLine(VOICE_PREVIEW_TEXT, voiceId);
+      status.textContent = "";
+      els.voicePreviewPlayer.src = url;
+      await els.voicePreviewPlayer.play();
+    } catch (err) {
+      status.textContent = "Couldn't preview that voice: " + (err.message || "unknown error");
+    } finally {
+      btn.disabled = false;
+    }
+  });
+}
+
+VOICE_PREVIEW_TARGETS.forEach(wireVoicePreview);
 
 async function generateKidsStory() {
   const lines = parseScript(els.kidsScript.value);
