@@ -37,6 +37,7 @@ module.exports = async function handler(req, res) {
     startImage, // data: URI or URL — video: keyframe / image-to-video source
     endImage, // data: URI or URL, video only
     style, // "standard" | "ugc" | "cartoon"
+    styleOverride, // optional custom style clause — replaces the built-in "cartoon" style text when given
     referenceImage, // data: URI or URL — product/character photo for a styled request
   } = body;
 
@@ -74,8 +75,11 @@ module.exports = async function handler(req, res) {
   const candidates = model.candidates || {};
 
   let finalPrompt = prompt.trim();
-  if (hasStyle && UGC_STYLE_CLAUSES[model.kind] && UGC_STYLE_CLAUSES[model.kind][style]) {
-    finalPrompt = `${finalPrompt}, ${UGC_STYLE_CLAUSES[model.kind][style]}`;
+  if (hasStyle) {
+    // A custom style description (e.g. matching a specific character's own
+    // art style) always wins over the built-in style clause when given.
+    const clause = (styleOverride && styleOverride.trim()) || (UGC_STYLE_CLAUSES[model.kind] && UGC_STYLE_CLAUSES[model.kind][style]);
+    if (clause) finalPrompt = `${finalPrompt}, ${clause}`;
   }
 
   const input = usingEditModel ? { prompt: finalPrompt } : { ...model.defaults, prompt: finalPrompt };
