@@ -1,6 +1,18 @@
 const { getInputSchema, firstSupportedField, createPrediction } = require("./_fal");
 
-const SONG_MODEL = "fal-ai/ace-step/prompt-to-audio";
+// IMPORTANT: this must be the base "fal-ai/ace-step" endpoint, NOT
+// "fal-ai/ace-step/prompt-to-audio" — that similarly-named variant has no
+// "lyrics" field at all. Its only text input is a single "prompt" field
+// that the model uses to INVENT its own tags and lyrics from scratch, so
+// whatever the user actually typed as lyrics would never reach the model as
+// literal sung lyrics — it'd just get silently sent as a bogus "lyrics"
+// field this endpoint's schema doesn't define, while the real "prompt"
+// field only received the style/caption text. Verified against the live
+// schemas for both endpoints (2026-07): "fal-ai/ace-step" is the one with
+// real, separate "lyrics" (literal lyrics to sing) and "tags" (comma-
+// separated genre tags, required) fields, matching what this file actually
+// intends to send.
+const SONG_MODEL = "fal-ai/ace-step";
 
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
@@ -37,8 +49,14 @@ module.exports = async function handler(req, res) {
   try {
     const schema = await getInputSchema(token, SONG_MODEL);
     const lyricsField = firstSupportedField(schema, ["lyrics"]) || "lyrics";
-    const captionField = firstSupportedField(schema, ["caption", "prompt", "tags"]) || "caption";
+    // "tags" first — that's this model's real, required style/genre field
+    // (a comma-separated genre list). "caption"/"prompt" are kept as
+    // fallbacks only in case a future model swap uses different naming.
+    const captionField = firstSupportedField(schema, ["tags", "caption", "prompt"]) || "tags";
     const durationField = firstSupportedField(schema, ["duration"]);
+    // fal-ai/ace-step doesn't expose a language field at all — this stays
+    // null for this model and the vocalLanguage input is simply unused,
+    // same graceful-degradation pattern as every other optional field here.
     const langField = firstSupportedField(schema, ["vocal_language", "language"]);
 
     const input = {
