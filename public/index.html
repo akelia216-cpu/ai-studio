@@ -117,6 +117,8 @@
                     <span>Voice</span>
                     <select id="videoAudioVoice"></select>
                     <input type="text" id="videoAudioVoiceManual" class="hidden" placeholder="e.g. Wise_Woman" />
+                    <button type="button" class="text-btn voice-preview-btn" id="videoAudioVoicePreviewBtn">▶ Preview voice</button>
+                    <span class="hint" id="videoAudioVoicePreviewStatus"></span>
                   </label>
                 </div>
                 <div id="videoAudioUploadFields" class="hidden">
@@ -203,11 +205,15 @@
                 <span>Kid voice</span>
                 <select id="kidVoice"></select>
                 <input type="text" id="kidVoiceManual" class="hidden" placeholder="e.g. Sweet_Girl_2" />
+                <button type="button" class="text-btn voice-preview-btn" id="kidVoicePreviewBtn">▶ Preview voice</button>
+                <span class="hint" id="kidVoicePreviewStatus"></span>
               </label>
               <label class="field">
                 <span>Adult voice</span>
                 <select id="adultVoice"></select>
                 <input type="text" id="adultVoiceManual" class="hidden" placeholder="e.g. Wise_Woman (default if left blank)" />
+                <button type="button" class="text-btn voice-preview-btn" id="adultVoicePreviewBtn">▶ Preview voice</button>
+                <span class="hint" id="adultVoicePreviewStatus"></span>
               </label>
             </div>
             <span class="hint" id="voiceListHint"></span>
@@ -294,6 +300,8 @@
                 <span>Pip's voice</span>
                 <select id="cartoonVoice"></select>
                 <input type="text" id="cartoonVoiceManual" class="hidden" placeholder="e.g. cute_boy" />
+                <button type="button" class="text-btn voice-preview-btn" id="cartoonVoicePreviewBtn">▶ Preview voice</button>
+                <span class="hint" id="cartoonVoicePreviewStatus"></span>
               </label>
             </div>
 
@@ -321,6 +329,8 @@
                     <span>Voice</span>
                     <select id="dialogueChar1Voice"></select>
                     <input type="text" id="dialogueChar1VoiceManual" class="hidden" placeholder="e.g. cute_boy" />
+                    <button type="button" class="text-btn voice-preview-btn" id="dialogueChar1VoicePreviewBtn">▶ Preview voice</button>
+                    <span class="hint" id="dialogueChar1VoicePreviewStatus"></span>
                   </label>
                 </div>
                 <div id="dialogueChar1CloneVoice" class="hidden">
@@ -356,6 +366,8 @@
                     <span>Voice</span>
                     <select id="dialogueChar2Voice"></select>
                     <input type="text" id="dialogueChar2VoiceManual" class="hidden" placeholder="e.g. Wise_Woman" />
+                    <button type="button" class="text-btn voice-preview-btn" id="dialogueChar2VoicePreviewBtn">▶ Preview voice</button>
+                    <span class="hint" id="dialogueChar2VoicePreviewStatus"></span>
                   </label>
                 </div>
                 <div id="dialogueChar2CloneVoice" class="hidden">
@@ -447,6 +459,10 @@
       </section>
     </main>
   </div>
+
+  <!-- Shared hidden player for the voice "Preview" buttons — one element
+       reused for every preview request rather than one per voice picker. -->
+  <audio id="voicePreviewPlayer" class="hidden"></audio>
 
   <script src="/app.js"></script>
 </body>
