@@ -154,6 +154,11 @@ const STATUS_MAP = { COMPLETED: "succeeded", IN_PROGRESS: "processing", IN_QUEUE
 // Extracts a usable output URL from fal's varied per-model result shapes.
 function extractOutput(resultData) {
   if (!resultData) return null;
+  // Voice cloning doesn't return a media file at all — it returns an opaque
+  // voice id string to reuse in later TTS calls. Piping it through the same
+  // "output" field the rest of the app already polls for lets /api/voice-clone
+  // reuse the existing generic status/poll plumbing instead of a bespoke path.
+  if (resultData.custom_voice_id) return resultData.custom_voice_id;
   if (resultData.images && resultData.images[0] && resultData.images[0].url) return resultData.images[0].url;
   if (resultData.image && resultData.image.url) return resultData.image.url;
   if (resultData.video && resultData.video.url) return resultData.video.url;
