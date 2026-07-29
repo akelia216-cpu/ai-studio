@@ -20,8 +20,19 @@ function resolveRef(doc, ref) {
 function extractInputSchema(doc) {
   try {
     const paths = doc.paths || {};
-    const firstPathKey = Object.keys(paths)[0];
-    const op = paths[firstPathKey] && paths[firstPathKey].post;
+    // fal's openapi doc lists several paths for one endpoint (the queue
+    // status/cancel/result routes plus the actual submission route) in no
+    // guaranteed order, and only the submission route has a POST — so the
+    // *first* path key is not reliably the right one (it's often
+    // "/{...}/requests/{request_id}/status", which only has a GET). Find
+    // the path that actually declares a POST instead of assuming position 0.
+    let op;
+    for (const key of Object.keys(paths)) {
+      if (paths[key] && paths[key].post) {
+        op = paths[key].post;
+        break;
+      }
+    }
     let schema = op && op.requestBody && op.requestBody.content && op.requestBody.content["application/json"] && op.requestBody.content["application/json"].schema;
     if (schema && schema.$ref) schema = resolveRef(doc, schema.$ref);
     if (schema && schema.properties) return { properties: schema.properties, required: schema.required || [] };
