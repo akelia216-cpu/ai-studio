@@ -76,7 +76,17 @@ const MODELS = {
       referenceImage: ["subject_reference", "character_reference"],
       seed: ["seed"],
     },
-    supportsCameraObject: true, // Kling's camera_control {type, config} shape
+    // Verified against this endpoint's live schema (2026-07): the
+    // "v1.6/standard" text-to-video/image-to-video variants used here do NOT
+    // expose a "camera_control" field at all (only cfg_scale/prompt/
+    // duration/negative_prompt, plus image_url on the i2v one) — that
+    // structured control exists on some other Kling variant/version, not
+    // this one. Left false so generate.js's schema check (which already
+    // gates on `schema.properties.camera_control` existing) doesn't imply
+    // structured support this endpoint doesn't have; camera motion for this
+    // model always goes through the plain prompt-text clause fallback, which
+    // already works correctly on its own.
+    supportsCameraObject: false,
   },
   "luma-ray-flash-2": {
     label: "Luma Ray Flash 2",
