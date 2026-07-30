@@ -1037,6 +1037,37 @@ async function loadFFmpeg(onProgress) {
   return { ffmpeg, fetchFile };
 }
 
+// Runs one ffmpeg.exec() call against a hard time limit. ffmpeg.wasm has no
+// built-in per-command timeout or cancellation — if a single operation gets
+// genuinely stuck (rather than cleanly erroring), the browser tab just spins
+// forever with no way to tell which clip or step is the problem, which is
+// exactly the "80+ minutes, never completes" symptom this was added to fix.
+// Racing the exec against a timer means a stuck operation now fails loudly,
+// names the step, and frees the (likely wedged) ffmpeg worker — instead of
+// hanging silently and indefinitely.
+async function execWithTimeout(ffmpeg, args, label, ms = 300000) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      try {
+        ffmpeg.terminate();
+      } catch {
+        /* best effort — we're already failing */
+      }
+      reject(
+        new Error(
+          `${label} did not finish within ${Math.round(ms / 1000)}s. Either it's genuinely stuck on a clip with an unusual format, or it's just a very long/high-res clip that's too slow to re-encode in the browser — try a shorter line or a lower-resolution model for that scene.`
+        )
+      );
+    }, ms);
+  });
+  try {
+    return await Promise.race([ffmpeg.exec(args), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Re-encodes one downloaded scene clip to a single canonical video spec
 // (resolution/fps/pixel format) before it ever reaches a concat step.
 //
@@ -1058,6 +1089,29 @@ async function loadFFmpeg(onProgress) {
 // hasAudio: whether this clip's re-encoded output should carry an audio
 // track at all (silent Dialogue beats get none here — sound-effect mixing
 // or synthetic silence is layered on afterward by the caller).
+//
+// Audio-embedded clips (AI Avatar v2) get extra handling here that
+// audio-less clips (Kling v1.6 silent beats) don't need, and that's not
+// incidental: AI Avatar v2 mixes its own lip-synced audio into the video
+// container as part of a completely different generation pipeline than
+// Kling's — it's not a track this app added afterward like every other
+// audio-bearing clip used to be. That means its audio packets' timing
+// relative to the video can be irregular in ways ffmpeg's default stream
+// handling doesn't expect. Two things address that directly:
+//   - explicit -map for each stream, instead of relying on ffmpeg's default
+//     "best stream" auto-selection, which is a guess when a container's
+//     stream layout isn't the plain single-video/single-audio case ffmpeg
+//     expects.
+//   - -max_muxing_queue_size raised way past the default — ffmpeg's own
+//     documented fix for a mux stage that stalls (not errors) when an
+//     audio stream's packet timing doesn't line up cleanly with the video
+//     it's being combined with, which is exactly the situation an
+//     externally-produced embedded audio track can create.
+//   - -fps_mode cfr forces a genuinely constant output frame rate at mux
+//     time (not just as a filter hint) — relevant because AI Avatar v2's
+//     clip length is driven by its input audio's duration rather than a
+//     fixed 5s like Kling, so its own internal frame timing is less
+//     predictable than Kling's fixed-cadence output.
 async function normalizeVideoClip(ffmpeg, fetchFile, url, outName, { hasAudio }) {
   const rawName = `raw_${outName}`;
   await ffmpeg.writeFile(rawName, await fetchFile(url));
@@ -1068,15 +1122,32 @@ async function normalizeVideoClip(ffmpeg, fetchFile, url, outName, { hasAudio })
   // AI Avatar v2 clips actually get scaled/re-timed.
   const canonicalVF = "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=black,fps=30,format=yuv420p";
 
-  const args = ["-i", rawName, "-vf", canonicalVF, "-c:v", "libx264", "-preset", "veryfast", "-crf", "20"];
+  const args = [
+    "-i",
+    rawName,
+    "-vf",
+    canonicalVF,
+    "-fps_mode",
+    "cfr",
+    "-map",
+    "0:v:0",
+    "-c:v",
+    "libx264",
+    "-preset",
+    "veryfast",
+    "-crf",
+    "20",
+    "-max_muxing_queue_size",
+    "9999",
+  ];
   if (hasAudio) {
-    args.push("-ar", "44100", "-ac", "2", "-c:a", "aac");
+    args.push("-map", "0:a:0", "-ar", "44100", "-ac", "2", "-c:a", "aac");
   } else {
     args.push("-an");
   }
   args.push(outName);
 
-  await ffmpeg.exec(args);
+  await execWithTimeout(ffmpeg, args, `Normalizing ${outName}`);
   await ffmpeg.deleteFile(rawName);
 }
 
@@ -1126,18 +1197,18 @@ async function stitchVideoClips(urls, onProgress, opts = {}) {
     // Every clip was just normalized to one canonical spec, so a plain
     // stream-copy concat is safe here (not a gamble on clips happening to
     // already match) and stays fast.
-    await ffmpeg.exec(["-f", "concat", "-safe", "0", "-i", "list.txt", "-c", "copy", "output.mp4"]);
+    await execWithTimeout(ffmpeg, ["-f", "concat", "-safe", "0", "-i", "list.txt", "-c", "copy", "output.mp4"], "Final concat");
   } catch {
     // Fallback: re-encode while concatenating (slower, but tolerant of any
     // mismatch between clips).
     const inputArgs = names.flatMap((n) => ["-i", n]);
     if (withAudio) {
       const filter = `${names.map((_, i) => `[${i}:v:0][${i}:a:0]`).join("")}concat=n=${names.length}:v=1:a=1[v][a]`;
-      await ffmpeg.exec([...inputArgs, "-filter_complex", filter, "-map", "[v]", "-map", "[a]", "output.mp4"]);
+      await execWithTimeout(ffmpeg, [...inputArgs, "-filter_complex", filter, "-map", "[v]", "-map", "[a]", "output.mp4"], "Final concat (fallback)");
     } else {
       // Plain (not-yet-lip-synced) AI video clips are almost always silent.
       const filter = `${names.map((_, i) => `[${i}:v:0]`).join("")}concat=n=${names.length}:v=1:a=0[v]`;
-      await ffmpeg.exec([...inputArgs, "-filter_complex", filter, "-map", "[v]", "output.mp4"]);
+      await execWithTimeout(ffmpeg, [...inputArgs, "-filter_complex", filter, "-map", "[v]", "output.mp4"], "Final concat (fallback)");
     }
   }
 
@@ -1791,24 +1862,36 @@ async function mixSfxAndStitch(sceneUrls, sfxAudioUrls, onProgress, opts = {}) {
         const outName = `mixed${i}.mp4`;
         try {
           await ffmpeg.writeFile(sName, await fetchFile(sfxAudioUrls[i]));
-          await ffmpeg.exec([
-            "-i",
-            vName,
-            "-i",
-            sName,
-            "-filter_complex",
-            "[1:a]volume=0.7[sfx];[0:a][sfx]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]",
-            "-map",
-            "0:v",
-            "-map",
-            "[a]",
-            "-c:v",
-            "copy",
-            "-c:a",
-            "aac",
-            "-shortest",
-            outName,
-          ]);
+          // vName's audio here may be AI Avatar v2's own embedded track
+          // (already normalized/re-encoded to plain aac/44.1kHz/stereo by
+          // normalizeVideoClip above, so it's not the raw model output at
+          // this point) being amix'd with a freshly-generated SFX clip —
+          // raising the muxing queue size is cheap insurance against the
+          // same mux-stall risk normalizeVideoClip guards against.
+          await execWithTimeout(
+            ffmpeg,
+            [
+              "-i",
+              vName,
+              "-i",
+              sName,
+              "-filter_complex",
+              "[1:a]volume=0.7[sfx];[0:a][sfx]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]",
+              "-map",
+              "0:v",
+              "-map",
+              "[a]",
+              "-c:v",
+              "copy",
+              "-c:a",
+              "aac",
+              "-max_muxing_queue_size",
+              "9999",
+              "-shortest",
+              outName,
+            ],
+            `Mixing SFX into scene ${i + 1}`
+          );
           finalNames.push(outName);
           continue;
         } catch {
@@ -1827,24 +1910,17 @@ async function mixSfxAndStitch(sceneUrls, sfxAudioUrls, onProgress, opts = {}) {
     if (sfxAudioUrls[i]) {
       const sName = `sfx${i}.mp3`;
       await ffmpeg.writeFile(sName, await fetchFile(sfxAudioUrls[i]));
-      await ffmpeg.exec(["-i", vName, "-i", sName, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-shortest", outName]);
+      await execWithTimeout(
+        ffmpeg,
+        ["-i", vName, "-i", sName, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-shortest", outName],
+        `Attaching SFX-only audio to scene ${i + 1}`
+      );
     } else {
-      await ffmpeg.exec([
-        "-i",
-        vName,
-        "-filter_complex",
-        "aevalsrc=0:d=10:s=44100[a]",
-        "-map",
-        "0:v",
-        "-map",
-        "[a]",
-        "-c:v",
-        "copy",
-        "-c:a",
-        "aac",
-        "-shortest",
-        outName,
-      ]);
+      await execWithTimeout(
+        ffmpeg,
+        ["-i", vName, "-filter_complex", "aevalsrc=0:d=10:s=44100[a]", "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-shortest", outName],
+        `Attaching silent audio to scene ${i + 1}`
+      );
     }
     finalNames.push(outName);
   }
@@ -1857,11 +1933,11 @@ async function mixSfxAndStitch(sceneUrls, sfxAudioUrls, onProgress, opts = {}) {
   const listContent = finalNames.map((n) => `file '${n}'`).join("\n");
   await ffmpeg.writeFile("list.txt", listContent);
   try {
-    await ffmpeg.exec(["-f", "concat", "-safe", "0", "-i", "list.txt", "-c", "copy", "output.mp4"]);
+    await execWithTimeout(ffmpeg, ["-f", "concat", "-safe", "0", "-i", "list.txt", "-c", "copy", "output.mp4"], "Final concat");
   } catch {
     const inputArgs = finalNames.flatMap((n) => ["-i", n]);
     const filter = `${finalNames.map((_, i) => `[${i}:v:0][${i}:a:0]`).join("")}concat=n=${finalNames.length}:v=1:a=1[v][a]`;
-    await ffmpeg.exec([...inputArgs, "-filter_complex", filter, "-map", "[v]", "-map", "[a]", "output.mp4"]);
+    await execWithTimeout(ffmpeg, [...inputArgs, "-filter_complex", filter, "-map", "[v]", "-map", "[a]", "output.mp4"], "Final concat (fallback)");
   }
 
   const data = await ffmpeg.readFile("output.mp4");
