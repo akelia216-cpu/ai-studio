@@ -1763,17 +1763,31 @@ function extractSfxTag(text) {
 }
 
 async function detectSfx(text) {
+  // Hard client-side timeout on top of the try/catch below — this is a
+  // nice-to-have auto-detection step, not something a generation run should
+  // ever be able to sit and wait on indefinitely, whether the failure is a
+  // fast 404 or a network request that never resolves at all.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
   try {
     const res = await fetch("/api/detect-sfx", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text }),
+      signal: controller.signal,
     });
-    const data = await res.json();
+    // Check res.ok BEFORE parsing the body as JSON — a 404 (or any routing
+    // failure) returns an HTML error page, not JSON, and calling .json() on
+    // that throws. That's still caught below either way, but checking first
+    // avoids a confusing "Unexpected token" message ever being the reason
+    // this silently returns null.
     if (!res.ok) return null;
-    return data.sfx || null;
+    const data = await res.json().catch(() => null);
+    return (data && data.sfx) || null;
   } catch {
     return null;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -1802,13 +1816,29 @@ async function detectSfxForScenes(texts) {
 }
 
 async function generateSoundEffect(text, durationSeconds = 2) {
-  const res = await fetch("/api/sound-effect", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text, durationSeconds }),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || "Sound effect generation was rejected.");
+  // Same reasoning as detectSfx's timeout: this call already gets caught by
+  // generateSfxAudioClips' per-scene try/catch (a failed SFX clip just means
+  // that scene plays without one), but a bad request/routing failure
+  // shouldn't be able to sit and wait indefinitely to get to that catch.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
+  let res;
+  try {
+    res = await fetch("/api/sound-effect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, durationSeconds }),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timer);
+  }
+  // Read the body defensively — a 404 (or any routing failure) returns an
+  // HTML error page, not JSON, and .json() throws on that; falling back to
+  // {} means the error below reads as a clean, specific message instead of
+  // an "Unexpected token" JSON-parse error.
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Sound effect generation was rejected (${res.status}).`);
   if (data.status === "succeeded") return Array.isArray(data.output) ? data.output[0] : data.output;
   const result = await pollPredictionPromise(data.id);
   if (result.status !== "succeeded") throw new Error(result.error || "Sound effect generation failed.");
