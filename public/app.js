@@ -633,6 +633,10 @@ async function pollPrediction(id, onDone) {
 }
 
 // ---------- Prompt enhancement ----------
+// Folded into /api/build-scene-prompt (via action: "enhance") rather than
+// its own endpoint — Vercel's Hobby plan caps a deployment at 12 serverless
+// functions, and adding api/ai-avatar.js pushed the project over that cap.
+// This was the lowest-risk merge available (see build-scene-prompt.js).
 
 els.enhanceBtn.addEventListener("click", async () => {
   const prompt = els.prompt.value.trim();
@@ -643,10 +647,10 @@ els.enhanceBtn.addEventListener("click", async () => {
   els.enhanceBtn.disabled = true;
   els.enhanceBtn.textContent = "Enhancing…";
   try {
-    const res = await fetch("/api/enhance-prompt", {
+    const res = await fetch("/api/build-scene-prompt", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt, kind: mode === "video" ? "video" : "image" }),
+      body: JSON.stringify({ action: "enhance", prompt, kind: mode === "video" ? "video" : "image" }),
     });
     const data = await res.json();
     if (!res.ok) {
@@ -1033,6 +1037,49 @@ async function loadFFmpeg(onProgress) {
   return { ffmpeg, fetchFile };
 }
 
+// Re-encodes one downloaded scene clip to a single canonical video spec
+// (resolution/fps/pixel format) before it ever reaches a concat step.
+//
+// Why this exists: Dialogue mode can now mix clips from two different video
+// models in the same stitch job — Kling v1.6 standard/image-to-video (fixed
+// 720p, 30fps, silent — no audio track at all) for silent beats, and Kling
+// AI Avatar v2 standard (variable resolution up to 1080p, duration driven by
+// the input audio rather than a fixed 5s, and a real embedded lip-synced
+// audio track) for spoken lines. Those are genuinely different output specs,
+// not just "probably fine" — confirmed via each model's own docs, not
+// assumed. Concatenating mismatched-resolution/fps clips via ffmpeg's
+// "-c copy" stream-copy concat is a classic cause of an indefinite hang
+// (rather than a clean, catchable error) in ffmpeg.wasm's single-threaded
+// build, because the demuxer can end up spinning on inconsistent timestamps
+// instead of failing outright. Normalizing every clip to one spec up front
+// means the final concat is always operating on truly uniform streams, so
+// the fast "-c copy" concat path is actually safe rather than a gamble.
+//
+// hasAudio: whether this clip's re-encoded output should carry an audio
+// track at all (silent Dialogue beats get none here — sound-effect mixing
+// or synthetic silence is layered on afterward by the caller).
+async function normalizeVideoClip(ffmpeg, fetchFile, url, outName, { hasAudio }) {
+  const rawName = `raw_${outName}`;
+  await ffmpeg.writeFile(rawName, await fetchFile(url));
+
+  // 1280x720/30fps/yuv420p is Kling v1.6 standard's own native image-to-video
+  // spec — picking it as the canonical target means the (very common)
+  // all-silent-beat case needs no real transcoding work, only the mismatched
+  // AI Avatar v2 clips actually get scaled/re-timed.
+  const canonicalVF = "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=black,fps=30,format=yuv420p";
+
+  const args = ["-i", rawName, "-vf", canonicalVF, "-c:v", "libx264", "-preset", "veryfast", "-crf", "20"];
+  if (hasAudio) {
+    args.push("-ar", "44100", "-ac", "2", "-c:a", "aac");
+  } else {
+    args.push("-an");
+  }
+  args.push(outName);
+
+  await ffmpeg.exec(args);
+  await ffmpeg.deleteFile(rawName);
+}
+
 // Concatenates short spoken-line audio clips (from TTS) into one track, with
 // a brief silent gap between lines so the dialogue doesn't run together.
 async function stitchAudioClips(urls, onProgress) {
@@ -1064,7 +1111,11 @@ async function stitchVideoClips(urls, onProgress, opts = {}) {
   const names = [];
   for (let i = 0; i < urls.length; i++) {
     const name = `scene${i}.mp4`;
-    await ffmpeg.writeFile(name, await fetchFile(urls[i]));
+    // Normalize first — clips in the same batch can come from different
+    // video models (e.g. Dialogue mode mixing Kling v1.6 silent beats with
+    // AI Avatar v2 spoken lines), which do not share resolution/fps/duration
+    // specs. See normalizeVideoClip's comment for why this matters.
+    await normalizeVideoClip(ffmpeg, fetchFile, urls[i], name, { hasAudio: withAudio });
     names.push(name);
   }
 
@@ -1072,8 +1123,9 @@ async function stitchVideoClips(urls, onProgress, opts = {}) {
   await ffmpeg.writeFile("list.txt", listContent);
 
   try {
-    // Fast path: works when every clip shares the same codec/resolution/fps,
-    // which is typical since every scene uses the same model + settings.
+    // Every clip was just normalized to one canonical spec, so a plain
+    // stream-copy concat is safe here (not a gamble on clips happening to
+    // already match) and stays fast.
     await ffmpeg.exec(["-f", "concat", "-safe", "0", "-i", "list.txt", "-c", "copy", "output.mp4"]);
   } catch {
     // Fallback: re-encode while concatenating (slower, but tolerant of any
@@ -1726,7 +1778,12 @@ async function mixSfxAndStitch(sceneUrls, sfxAudioUrls, onProgress, opts = {}) {
   const finalNames = [];
   for (let i = 0; i < sceneUrls.length; i++) {
     const vName = `scene${i}.mp4`;
-    await ffmpeg.writeFile(vName, await fetchFile(sceneUrls[i]));
+    // Normalize on load, same as stitchVideoClips — scenes here can mix
+    // Kling v1.6 (silent beats) and AI Avatar v2 (spoken lines) clips, whose
+    // resolution/fps/duration specs genuinely differ between models. Doing
+    // this before any sfx-mixing/concat step means every later ffmpeg call
+    // in this function is working with uniform streams.
+    await normalizeVideoClip(ffmpeg, fetchFile, sceneUrls[i], vName, { hasAudio: baseHasAudio[i] });
 
     if (baseHasAudio[i]) {
       if (sfxAudioUrls[i]) {
