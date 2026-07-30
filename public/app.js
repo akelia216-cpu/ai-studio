@@ -1068,6 +1068,34 @@ async function execWithTimeout(ffmpeg, args, label, ms = 300000) {
   }
 }
 
+// Same reasoning as execWithTimeout, but for the raw clip *download* that
+// happens before any ffmpeg.exec call ever runs. fetchFile() (from
+// @ffmpeg/util) is a plain fetch() under the hood with no timeout of its
+// own, and every call site here awaits it before writing the file into
+// ffmpeg's virtual filesystem — meaning a stalled/slow download (a real
+// possibility for a longer AI Avatar v2 clip, or an ordinary CDN hiccup)
+// hangs indefinitely with zero console output, and completely bypasses
+// execWithTimeout's coverage since it never reaches an ffmpeg.exec call at
+// all. This is the actual gap behind the second identical hang: the
+// previous fix protected every ffmpeg step, but not the download in front
+// of it. fetchFile() doesn't accept an AbortSignal, so this can't truly
+// cancel the underlying network request, but racing it against a timer
+// still means the app stops waiting and reports a clear, specific error
+// instead of sitting stuck with nothing to show for it.
+async function fetchFileWithTimeout(fetchFile, url, label, ms = 120000) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`${label} took longer than ${Math.round(ms / 1000)}s to download — the source URL may be slow, unreachable, or stalled.`));
+    }, ms);
+  });
+  try {
+    return await Promise.race([fetchFile(url), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Re-encodes one downloaded scene clip to a single canonical video spec
 // (resolution/fps/pixel format) before it ever reaches a concat step.
 //
@@ -1114,7 +1142,7 @@ async function execWithTimeout(ffmpeg, args, label, ms = 300000) {
 //     predictable than Kling's fixed-cadence output.
 async function normalizeVideoClip(ffmpeg, fetchFile, url, outName, { hasAudio }) {
   const rawName = `raw_${outName}`;
-  await ffmpeg.writeFile(rawName, await fetchFile(url));
+  await ffmpeg.writeFile(rawName, await fetchFileWithTimeout(fetchFile, url, `Downloading ${outName}`));
 
   // 1280x720/30fps/yuv420p is Kling v1.6 standard's own native image-to-video
   // spec — picking it as the canonical target means the (very common)
@@ -1159,7 +1187,7 @@ async function stitchAudioClips(urls, onProgress) {
   const names = [];
   for (let i = 0; i < urls.length; i++) {
     const name = `line${i}.mp3`;
-    await ffmpeg.writeFile(name, await fetchFile(urls[i]));
+    await ffmpeg.writeFile(name, await fetchFileWithTimeout(fetchFile, urls[i], `Downloading ${name}`));
     names.push(name);
   }
 
@@ -1625,7 +1653,7 @@ els.generateCharacterBtn.addEventListener("click", async () => {
 // enough to send inline) so each can be lip-synced to its own scene clip.
 async function sliceSongIntoSegments(songUrl, segmentSeconds, count) {
   const { ffmpeg, fetchFile } = await loadFFmpeg();
-  await ffmpeg.writeFile("song.mp3", await fetchFile(songUrl));
+  await ffmpeg.writeFile("song.mp3", await fetchFileWithTimeout(fetchFile, songUrl, "Downloading song.mp3"));
 
   const segments = [];
   for (let i = 0; i < count; i++) {
@@ -1891,7 +1919,7 @@ async function mixSfxAndStitch(sceneUrls, sfxAudioUrls, onProgress, opts = {}) {
         const sName = `sfx${i}.mp3`;
         const outName = `mixed${i}.mp4`;
         try {
-          await ffmpeg.writeFile(sName, await fetchFile(sfxAudioUrls[i]));
+          await ffmpeg.writeFile(sName, await fetchFileWithTimeout(fetchFile, sfxAudioUrls[i], `Downloading ${sName}`));
           // vName's audio here may be AI Avatar v2's own embedded track
           // (already normalized/re-encoded to plain aac/44.1kHz/stereo by
           // normalizeVideoClip above, so it's not the raw model output at
@@ -1939,7 +1967,7 @@ async function mixSfxAndStitch(sceneUrls, sfxAudioUrls, onProgress, opts = {}) {
     const outName = `withaudio${i}.mp4`;
     if (sfxAudioUrls[i]) {
       const sName = `sfx${i}.mp3`;
-      await ffmpeg.writeFile(sName, await fetchFile(sfxAudioUrls[i]));
+      await ffmpeg.writeFile(sName, await fetchFileWithTimeout(fetchFile, sfxAudioUrls[i], `Downloading ${sName}`));
       await execWithTimeout(
         ffmpeg,
         ["-i", vName, "-i", sName, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-shortest", outName],
