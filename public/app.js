@@ -3,7 +3,7 @@
 // the latest file actually made it to production — that mismatch has been
 // the root cause of more than one "the fix didn't work" report in this
 // project's history.
-const APP_BUILD = "2026-07-31-error-logging-1";
+const APP_BUILD = "2026-07-31-core-sameorigin-1";
 console.log(`[AI Studio] app.js build ${APP_BUILD} loaded`);
 
 // Timestamped console breadcrumb for the sound-effect/stitch pipeline
@@ -1055,13 +1055,11 @@ async function loadFFmpeg(onProgress) {
   // back" symptom seen after the "mixSfxAndStitch: start..." log line.
   stitchLog("loadFFmpeg: importing ffmpeg/util modules");
   const { FFmpeg } = await withTimeoutPromise(import("https://esm.sh/@ffmpeg/ffmpeg@0.12.10"), "Loading the ffmpeg module");
-  const { fetchFile, toBlobURL } = await withTimeoutPromise(import("https://esm.sh/@ffmpeg/util@0.12.1"), "Loading the ffmpeg util module");
+  const { fetchFile } = await withTimeoutPromise(import("https://esm.sh/@ffmpeg/util@0.12.1"), "Loading the ffmpeg util module");
   stitchLog("loadFFmpeg: modules imported, fetching core/wasm/worker files");
 
   const ffmpeg = new FFmpeg();
   if (onProgress) ffmpeg.on("progress", ({ progress }) => onProgress(progress));
-
-  const base = "https://esm.sh/@ffmpeg/core@0.12.6/dist/esm";
 
   // ffmpeg.wasm spawns its own worker to actually run ffmpeg. The worker
   // script's default location resolves to esm.sh's own origin, and browsers
@@ -1088,15 +1086,44 @@ async function loadFFmpeg(onProgress) {
   // (keep the worker same-origin; only core JS/WASM need blob-ifying).
   const classWorkerURL = new URL("/vendor/ffmpeg/worker.js", window.location.origin).href;
 
-  // Fetched in parallel — no ordering dependency between the two files, and
-  // it means one slow resource doesn't serialize behind the other.
-  const [coreURL, wasmURL] = await Promise.all([
-    withTimeoutPromise(toBlobURL(`${base}/ffmpeg-core.js`, "text/javascript"), "Fetching ffmpeg-core.js"),
-    // The wasm binary is the largest of the two (~25-30MB) — give it more
-    // room than the other before calling it stuck.
-    withTimeoutPromise(toBlobURL(`${base}/ffmpeg-core.wasm`, "application/wasm"), "Fetching ffmpeg-core.wasm", 120000),
-  ]);
-  stitchLog("loadFFmpeg: core/wasm fetched, initializing the ffmpeg engine (worker served same-origin)");
+  // Fixing the worker above revealed a second, distinct bug in the exact
+  // same family: coreURL was still being fetched from esm.sh and blob-ified.
+  // Verified directly (fetched both URLs and diffed the bytes): esm.sh does
+  // NOT serve the real @ffmpeg/core build at this path — it serves a 3-line
+  // ES module *shim* whose entire content is:
+  //   import "/node/buffer.mjs";
+  //   import "/node/process.mjs";
+  //   export * from "/@ffmpeg/core@0.12.6/es2022/core.mjs";
+  //   export { default } from "/@ffmpeg/core@0.12.6/es2022/core.mjs";
+  // Those four specifiers are root-relative — they only resolve against
+  // esm.sh's own origin (https://esm.sh/node/buffer.mjs, etc.). worker.js
+  // (see real_worker.js source) loads coreURL via a dynamic
+  // `import(coreURL)` run *inside the worker*. Once coreURL was a blob: URL
+  // built from that shim's text, the browser tried to resolve those
+  // root-relative specifiers against the blob — which has no origin/path
+  // to resolve against — producing exactly the captured error:
+  //   TypeError: Failed to resolve module specifier "/node/buffer.mjs".
+  //   Invalid relative url or base scheme isn't hierarchical.
+  // Fix, verified against the real fetched bytes: unpkg.com serves the
+  // actual compiled @ffmpeg/core build at this path (114KB, self-contained,
+  // zero import statements, ends in `export default createFFmpegCore;`) —
+  // not a shim. That real coreURL file is now hosted same-origin at
+  // public/vendor/ffmpeg/, exactly like worker.js, so the worker's
+  // `import(coreURL)` resolves against this app's own origin.
+  //
+  // wasmURL is different: it's a pure ~30MB WebAssembly binary with no
+  // import specifiers of its own (only *.js module URLs can hit the bug
+  // above), and it's loaded via a plain fetch()/WebAssembly.instantiate
+  // call, not `import()` — so it has no relative-import problem to route
+  // around, and no CORS problem either (verified via `curl -I`: unpkg.com
+  // serves it with `access-control-allow-origin: *`). Self-hosting a 30MB
+  // binary would also blow past this app's file-delivery size limit for no
+  // benefit, so wasmURL is left pointing straight at unpkg's real build
+  // (not esm.sh's, to guarantee it's the exact same core version as
+  // coreURL) rather than being copied into this repo.
+  const coreURL = new URL("/vendor/ffmpeg/ffmpeg-core.js", window.location.origin).href;
+  const wasmURL = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm/ffmpeg-core.wasm";
+  stitchLog("loadFFmpeg: core+worker same-origin, wasm from unpkg (CORS-enabled), initializing the ffmpeg engine");
 
   await withTimeoutPromise(ffmpeg.load({ coreURL, wasmURL, classWorkerURL }), "Initializing the ffmpeg engine", 90000);
   stitchLog("loadFFmpeg: ffmpeg engine ready");
