@@ -3,7 +3,7 @@
 // the latest file actually made it to production — that mismatch has been
 // the root cause of more than one "the fix didn't work" report in this
 // project's history.
-const APP_BUILD = "2026-07-31-ffmpeg-load-timeout-1";
+const APP_BUILD = "2026-07-31-ffmpeg-worker-sameorigin-1";
 console.log(`[AI Studio] app.js build ${APP_BUILD} loaded`);
 
 // Timestamped console breadcrumb for the sound-effect/stitch pipeline
@@ -1062,26 +1062,41 @@ async function loadFFmpeg(onProgress) {
   if (onProgress) ffmpeg.on("progress", ({ progress }) => onProgress(progress));
 
   const base = "https://esm.sh/@ffmpeg/core@0.12.6/dist/esm";
-  // ffmpeg.wasm spawns its own worker (default "./worker.js", resolved against
-  // esm.sh's module URL) to actually run ffmpeg — since that resolves to a
-  // different origin than this app, browsers refuse to construct that Worker
-  // at all ("cannot be accessed from origin ..."). Blob-ifying it, exactly
-  // like coreURL/wasmURL already are, makes it same-origin. esm.sh
-  // content-hashes its internal file paths (so the worker isn't at a stable
-  // URL there); unpkg serves the package's raw files unchanged, so pull the
-  // worker script from there instead.
-  const workerBase = "https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/esm";
 
-  // Fetched in parallel — no ordering dependency between the three files,
-  // and it means one slow resource doesn't serialize behind the others.
-  const [coreURL, wasmURL, classWorkerURL] = await Promise.all([
+  // ffmpeg.wasm spawns its own worker to actually run ffmpeg. The worker
+  // script's default location resolves to esm.sh's own origin, and browsers
+  // refuse to construct a Worker from a script on a different origin than
+  // the page — so it needs to be made same-origin somehow.
+  //
+  // The previous version of this code "fixed" that by fetching worker.js's
+  // *text* and wrapping it in a blob: URL, the same trick used for
+  // coreURL/wasmURL below. That's the actual cause of the hang: worker.js
+  // is an ES module with its own relative imports ("./const.js",
+  // "./errors.js"). A blob: URL has no real directory for those relative
+  // specifiers to resolve against, so the module worker fails to initialize
+  // — silently, with no error surfaced back to the page, which is why
+  // `ffmpeg.load()` just hung forever instead of throwing. This is a
+  // documented ffmpeg.wasm issue (ffmpegwasm/ffmpeg.wasm #619, #767, #532),
+  // not something specific to this app, and it explains the exact symptom:
+  // core.js/core.wasm (which have no relative imports of their own) fetch
+  // and blob-ify just fine, only the worker hangs.
+  //
+  // The fix: don't blob the worker at all. Serve worker.js and its two small
+  // dependency files as real static files from this app's own origin
+  // (public/vendor/ffmpeg/), so "./const.js" and "./errors.js" resolve the
+  // normal way, exactly like the ffmpeg.wasm maintainers' own docs recommend
+  // (keep the worker same-origin; only core JS/WASM need blob-ifying).
+  const classWorkerURL = new URL("/vendor/ffmpeg/worker.js", window.location.origin).href;
+
+  // Fetched in parallel — no ordering dependency between the two files, and
+  // it means one slow resource doesn't serialize behind the other.
+  const [coreURL, wasmURL] = await Promise.all([
     withTimeoutPromise(toBlobURL(`${base}/ffmpeg-core.js`, "text/javascript"), "Fetching ffmpeg-core.js"),
-    // The wasm binary is the largest of the three (~25-30MB) — give it more
-    // room than the others before calling it stuck.
+    // The wasm binary is the largest of the two (~25-30MB) — give it more
+    // room than the other before calling it stuck.
     withTimeoutPromise(toBlobURL(`${base}/ffmpeg-core.wasm`, "application/wasm"), "Fetching ffmpeg-core.wasm", 120000),
-    withTimeoutPromise(toBlobURL(`${workerBase}/worker.js`, "text/javascript"), "Fetching the ffmpeg worker script"),
   ]);
-  stitchLog("loadFFmpeg: core/wasm/worker fetched, initializing the ffmpeg engine");
+  stitchLog("loadFFmpeg: core/wasm fetched, initializing the ffmpeg engine (worker served same-origin)");
 
   await withTimeoutPromise(ffmpeg.load({ coreURL, wasmURL, classWorkerURL }), "Initializing the ffmpeg engine", 90000);
   stitchLog("loadFFmpeg: ffmpeg engine ready");
