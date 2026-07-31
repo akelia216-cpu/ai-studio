@@ -46,6 +46,55 @@
 const { callLLM } = require("./_llm");
 const { CAMERA_PRESETS } = require("./_models");
 
+// Merged in from the former api/enhance-prompt.js (2026-07) — Vercel's Hobby
+// plan caps a deployment at 12 serverless functions (one per file in api/,
+// excluding "_"-prefixed shared helpers), and adding api/ai-avatar.js pushed
+// the project over that cap. enhance-prompt.js was picked to fold into this
+// file specifically because both do the exact same basic job (ask the LLM to
+// write a better prompt) and both already depend only on callLLM — the
+// lowest-risk merge available. Dispatched via `action: "enhance"` in the
+// request body; every other request (no `action` field) falls through to
+// the original scene-prompt behavior below, unchanged.
+// Fixes a real, confirmed continuity bug: every scene's visual prompt used
+// to be written completely independently (one LLM call per line, no shared
+// state at all), so when a script has a vague object referenced across
+// multiple lines — "I found something over here!" ... "What did you find?"
+// ... "they lean in to look closer" — each scene invented its own idea of
+// what that object looked like, with zero memory of what an earlier scene
+// already decided. This pre-pass reads the WHOLE script once, up front,
+// and decides on ONE concrete visual description for any such object,
+// which every per-scene call below is then given as a fixed constraint
+// (see "Established visual details" in userTextParts) instead of inventing
+// its own. Dispatched via `action: "establish-context"`, called once by the
+// client before any per-scene prompt calls, same merge pattern as "enhance".
+const ESTABLISH_CONTEXT_INSTRUCTION =
+  "You are given the full sequence of lines from a short video script, in order, one per line and numbered. " +
+  "Identify any physical object, item, or prop that is mentioned, discovered, held, or referred to across MORE " +
+  "THAN ONE line — especially a vague reference like \"something\" or \"it\" that gets picked up or found in one " +
+  "line and referred back to in later lines — because that object needs to look VISUALLY IDENTICAL every time it " +
+  "appears on screen, and right now each line would otherwise be illustrated completely independently with no " +
+  "shared memory between them. " +
+  "For each such object, invent exactly ONE concrete, specific, simple, child-friendly visual description — " +
+  "shape, color, size, material, 6-14 words — and commit to it. If a line only vaguely names the object " +
+  '("something", "it"), you must still invent one concrete option and use that same description for every ' +
+  "line that refers to it. Ignore objects that only ever appear in a single line — those don't need this. " +
+  "If nothing in the script needs this kind of cross-line continuity, reply with exactly the single word: NONE.\n\n" +
+  "Respond in EXACTLY this format, one object per line, nothing else:\n" +
+  "<short reference name>: <concrete visual description>";
+
+const ENHANCE_INSTRUCTIONS = {
+  image:
+    "You rewrite short image prompts into vivid, detailed prompts for an AI image generator. " +
+    "Keep the user's subject and intent exactly the same — add concrete visual detail: lighting, " +
+    "composition, camera/lens feel, color palette, mood, and style. 2-3 sentences max. " +
+    "Return ONLY the rewritten prompt, no preamble, no quotes.",
+  video:
+    "You rewrite short video prompts into vivid, detailed prompts for an AI video generator. " +
+    "Keep the user's subject and intent exactly the same — add concrete detail about motion, " +
+    "camera behavior, lighting, and atmosphere. 2-3 sentences max. " +
+    "Return ONLY the rewritten prompt, no preamble, no quotes.",
+};
+
 const DEFAULT_STYLE = "flat 2D cartoon animation style, soft rounded character design, bright warm color palette";
 const CAMERA_KEYS = Object.keys(CAMERA_PRESETS);
 
@@ -193,6 +242,55 @@ module.exports = async function handler(req, res) {
   }
   body = body || {};
 
+  // Merged-in enhance-prompt.js behavior — see ENHANCE_INSTRUCTIONS above.
+  // Handled first and returns early: an enhance request has its own much
+  // simpler shape (prompt + kind) and would otherwise fail the
+  // characterName/lineText check just below, which only applies to the
+  // original scene-prompt behavior.
+  if (body.action === "enhance") {
+    const { prompt, kind } = body;
+    if (!prompt || !prompt.trim()) {
+      res.status(400).json({ error: "Prompt is required." });
+      return;
+    }
+    try {
+      let text = await callLLM(token, ENHANCE_INSTRUCTIONS[kind] || ENHANCE_INSTRUCTIONS.image, prompt.trim(), 180);
+      text = text.replace(/^"|"$/g, "").trim();
+      if (!text) {
+        res.status(200).json({ enhancedPrompt: prompt, note: "Model returned nothing usable; kept your original prompt." });
+        return;
+      }
+      res.status(200).json({ enhancedPrompt: text });
+    } catch (err) {
+      res.status(err.status || 500).json({ error: err.message || "Unexpected server error." });
+    }
+    return;
+  }
+
+  // Cross-scene continuity pre-pass — see ESTABLISH_CONTEXT_INSTRUCTION
+  // above. Called once per full script, before any per-scene prompt calls.
+  if (body.action === "establish-context") {
+    const { lines } = body;
+    if (!Array.isArray(lines) || lines.length === 0) {
+      res.status(400).json({ error: "lines (a non-empty array) is required." });
+      return;
+    }
+    try {
+      const numbered = lines.map((l, i) => `${i + 1}. ${l}`).join("\n");
+      let text = await callLLM(token, ESTABLISH_CONTEXT_INSTRUCTION, numbered, 220);
+      text = text.replace(/^"|"$/g, "").trim();
+      const establishedContext = text && text.toUpperCase() !== "NONE" ? text : "";
+      res.status(200).json({ establishedContext });
+    } catch (err) {
+      // Same philosophy as every other auto-detection step in this app: a
+      // failure here is a missed nice-to-have (scenes fall back to full
+      // independence, today's behavior), not something that should block
+      // generation entirely.
+      res.status(200).json({ establishedContext: "", note: err.message || "Couldn't establish shared context." });
+    }
+    return;
+  }
+
   const {
     characterName,
     characterDescription,
@@ -204,6 +302,7 @@ module.exports = async function handler(req, res) {
     nonVerbal, // true for a silent action beat (no dialogue, no lip sync)
     bothScene, // true when this scene uses the "both characters together" reference image
     skipCameraMotion, // true when this scene won't go through /api/generate at all (e.g. Dialogue mode's spoken lines, routed to /api/ai-avatar instead) — camera motion is inapplicable, not just restricted
+    establishedContext, // optional string from the "establish-context" pre-pass — fixed visual descriptions for any object/prop that recurs across multiple scenes, so this scene doesn't invent its own competing appearance for it
   } = body;
   if (!characterName || !lineText) {
     res.status(400).json({ error: "characterName and lineText are required." });
@@ -213,6 +312,7 @@ module.exports = async function handler(req, res) {
   const hasExpressionList = Array.isArray(availableExpressions) && availableExpressions.length > 0;
   const willLipSync = !nonVerbal;
   const allowedCameraKeys = willLipSync ? LIPSYNC_SAFE_CAMERA_KEYS : CAMERA_KEYS;
+  const hasEstablishedContext = !!(establishedContext && establishedContext.trim());
 
   const userTextParts = [`Character: ${characterName}${characterDescription ? ` — ${characterDescription}` : ""}`];
   if (expression && expression !== "default") userTextParts.push(`Current/tagged expression: ${expression}`);
@@ -224,6 +324,14 @@ module.exports = async function handler(req, res) {
       : "No fixed setting given — invent one matching this moment."
   );
   if (bothScene) userTextParts.push("Both characters are together in the starting reference image for this scene.");
+  if (hasEstablishedContext) {
+    userTextParts.push(
+      "Established visual details from elsewhere in this same script — if this scene involves any of these " +
+        "objects/items, you MUST describe it using this exact same description, not a new one of your own " +
+        "invention (ignore any entry that isn't relevant to this specific scene):\n" +
+        establishedContext.trim()
+    );
+  }
   userTextParts.push(`${nonVerbal ? "Action/stage direction" : "Line"}: "${lineText}"`);
 
   try {
