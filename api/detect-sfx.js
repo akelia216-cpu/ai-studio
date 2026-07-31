@@ -29,6 +29,12 @@ const INSTRUCTION =
   "The action AND the object/surface involved must both be explicitly named or unambiguously and specifically " +
   "described in the text itself. A vague statement that something happened, was found, or was noticed — with " +
   "no stated object, impact, or motion — does NOT count, even if a sound effect seems plausible or dramatic. " +
+  "Quiet body language and reactive gestures — turning or tilting one's head, looking, glancing, leaning in, " +
+  "nodding, blinking, shrugging, tensing up, standing still, sitting down gently — do NOT count either, even " +
+  "though they're real physical actions, because a calm human body producing them makes no noticeable sound. " +
+  "Only count a body movement if the text itself describes it as forceful, sudden, or impactful enough to make " +
+  "actual noise (stomping, falling hard, a violent flinch that knocks something over, etc.) — moving slowly, " +
+  "gently, or normally never counts, no matter which body part is doing it. " +
   "When genuinely unsure, answer NONE rather than guessing. " +
   "Ordinary talking, walking calmly, discovering/noticing something with no described physical event, and quiet " +
   "emotional moments do NOT count. " +
@@ -44,6 +50,10 @@ const INSTRUCTION =
   "or anything else here.)\n\n" +
   'Text: "He slammed the door and stormed off."\n' +
   "Reply: a door slamming shut hard\n\n" +
+  'Text: "slowly turns his head toward the sound"\n' +
+  "Reply: NONE\n" +
+  "(A calm head turn — quiet body language, not a forceful or noisy action. Do not guess \"head swiveling\", " +
+  "cracking, or anything else here — a real human head turning slowly and calmly makes no distinct sound.)\n\n" +
   'Text: "What did you find, Pip?"\n' +
   "Reply: NONE\n" +
   "(Ordinary spoken dialogue, no physical action at all.)\n\n" +
