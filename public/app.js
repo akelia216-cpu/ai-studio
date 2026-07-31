@@ -1,3 +1,21 @@
+// Bumped on every delivered app.js so a hang/bug report can start with "what
+// does your console print on page load" instead of re-litigating whether
+// the latest file actually made it to production — that mismatch has been
+// the root cause of more than one "the fix didn't work" report in this
+// project's history.
+const APP_BUILD = "2026-07-30-stitch-diagnostics-1";
+console.log(`[AI Studio] app.js build ${APP_BUILD} loaded`);
+
+// Timestamped console breadcrumb for the sound-effect/stitch pipeline
+// specifically — this stage has hung silently (zero console output) on
+// multiple prior test rounds, taking an hour or more of dead waiting before
+// anyone could confirm something was actually wrong versus just slow. Every
+// meaningful step in that pipeline now logs through this, so a hang always
+// leaves a visible trail of exactly which step it never got past.
+function stitchLog(...args) {
+  console.log(`[stitch ${new Date().toISOString()}]`, ...args);
+}
+
 // Keep this in sync with api/_models.js (label + kind only — the backend
 // owns the actual parameter whitelist and schema introspection).
 const MODELS = {
@@ -1096,6 +1114,33 @@ async function fetchFileWithTimeout(fetchFile, url, label, ms = 120000) {
   }
 }
 
+// Last-resort backstop around the ENTIRE sound-effect/stitch stage, on top
+// of every individual per-step timeout above. Every step in this stage is
+// now individually time-bounded, so in principle this should never actually
+// fire — but "in principle" is exactly what was true of the stage as a
+// whole before this round of fixes too, and this stage has now hung
+// silently on multiple separate rounds for reasons that turned out to be
+// one step removed from wherever was last fixed. This exists so a gap
+// nobody has found yet still fails within a bounded, reported time instead
+// of running for another hour with no evidence anything is wrong.
+async function withOverallTimeout(promise, label, ms = 1200000) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(
+        new Error(
+          `${label} did not finish within ${Math.round(ms / 60000)} minute(s) overall, even though every individual step in this stage has its own timeout — something here is stuck in a way none of those caught. Check the browser console for the last "[stitch ...]" line logged before this — that's the step it never got past.`
+        )
+      );
+    }, ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Re-encodes one downloaded scene clip to a single canonical video spec
 // (resolution/fps/pixel format) before it ever reaches a concat step.
 //
@@ -1141,8 +1186,11 @@ async function fetchFileWithTimeout(fetchFile, url, label, ms = 120000) {
 //     fixed 5s like Kling, so its own internal frame timing is less
 //     predictable than Kling's fixed-cadence output.
 async function normalizeVideoClip(ffmpeg, fetchFile, url, outName, { hasAudio }) {
+  stitchLog(`normalize ${outName}: start, hasAudio=${hasAudio}, source=${url.slice(0, 90)}`);
   const rawName = `raw_${outName}`;
-  await ffmpeg.writeFile(rawName, await fetchFileWithTimeout(fetchFile, url, `Downloading ${outName}`));
+  const raw = await fetchFileWithTimeout(fetchFile, url, `Downloading ${outName}`);
+  stitchLog(`normalize ${outName}: downloaded ${raw.byteLength} bytes`);
+  await ffmpeg.writeFile(rawName, raw);
 
   // 1280x720/30fps/yuv420p is Kling v1.6 standard's own native image-to-video
   // spec — picking it as the canonical target means the (very common)
@@ -1176,6 +1224,7 @@ async function normalizeVideoClip(ffmpeg, fetchFile, url, outName, { hasAudio })
   args.push(outName);
 
   await execWithTimeout(ffmpeg, args, `Normalizing ${outName}`);
+  stitchLog(`normalize ${outName}: encode finished`);
   await ffmpeg.deleteFile(rawName);
 }
 
@@ -1832,6 +1881,11 @@ async function resolveSfxForScenes(texts) {
     manualFlags.push(manualSfx);
   }
   const sfxDescriptions = await runWithConcurrency(texts, 3, async (_, i) => (manualFlags[i] ? manualFlags[i] : await detectSfx(cleanTexts[i])));
+  stitchLog(
+    `resolveSfxForScenes: ${sfxDescriptions.filter(Boolean).length}/${sfxDescriptions.length} scene(s) got a sound effect — [${sfxDescriptions
+      .map((d) => (d ? "yes" : "no"))
+      .join(",")}]`
+  );
   return { cleanTexts, sfxDescriptions };
 }
 
@@ -1844,6 +1898,7 @@ async function detectSfxForScenes(texts) {
 }
 
 async function generateSoundEffect(text, durationSeconds = 2) {
+  stitchLog(`generateSoundEffect: submitting "${text.slice(0, 60)}"`);
   // Same reasoning as detectSfx's timeout: this call already gets caught by
   // generateSfxAudioClips' per-scene try/catch (a failed SFX clip just means
   // that scene plays without one), but a bad request/routing failure
@@ -1867,9 +1922,14 @@ async function generateSoundEffect(text, durationSeconds = 2) {
   // an "Unexpected token" JSON-parse error.
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `Sound effect generation was rejected (${res.status}).`);
-  if (data.status === "succeeded") return Array.isArray(data.output) ? data.output[0] : data.output;
+  if (data.status === "succeeded") {
+    stitchLog(`generateSoundEffect: succeeded inline for "${text.slice(0, 60)}"`);
+    return Array.isArray(data.output) ? data.output[0] : data.output;
+  }
+  stitchLog(`generateSoundEffect: queued, polling for "${text.slice(0, 60)}"`);
   const result = await pollPredictionPromise(data.id);
   if (result.status !== "succeeded") throw new Error(result.error || "Sound effect generation failed.");
+  stitchLog(`generateSoundEffect: poll succeeded for "${text.slice(0, 60)}"`);
   return result.url;
 }
 
@@ -1878,14 +1938,18 @@ async function generateSoundEffect(text, durationSeconds = 2) {
 // individual SFX generation just means that scene plays without one; it's
 // not treated as fatal since it's a nice-to-have on top of the main video.
 async function generateSfxAudioClips(sfxDescriptions) {
-  return await runWithConcurrency(sfxDescriptions, 3, async (desc) => {
+  stitchLog(`generateSfxAudioClips: generating ${sfxDescriptions.filter(Boolean).length} SFX clip(s)`);
+  const results = await runWithConcurrency(sfxDescriptions, 3, async (desc) => {
     if (!desc) return null;
     try {
       return await generateSoundEffect(desc, 2);
-    } catch {
+    } catch (err) {
+      stitchLog(`generateSfxAudioClips: one clip failed, continuing without it — ${err && err.message}`);
       return null;
     }
   });
+  stitchLog(`generateSfxAudioClips: done, ${results.filter(Boolean).length}/${results.length} clip(s) produced`);
+  return results;
 }
 
 // Mixes each scene's optional SFX clip into its already-lip-synced video
@@ -1902,11 +1966,18 @@ async function generateSfxAudioClips(sfxDescriptions) {
 // clips (which breaks both the fast-copy and filter_complex concat paths).
 async function mixSfxAndStitch(sceneUrls, sfxAudioUrls, onProgress, opts = {}) {
   const baseHasAudio = opts.baseHasAudio || sceneUrls.map(() => true);
+  stitchLog(
+    `mixSfxAndStitch: start, ${sceneUrls.length} scene(s), baseHasAudio=[${baseHasAudio.join(",")}], sfx=[${sfxAudioUrls
+      .map((u) => (u ? "yes" : "no"))
+      .join(",")}]`
+  );
   const { ffmpeg, fetchFile } = await loadFFmpeg(onProgress);
+  stitchLog("mixSfxAndStitch: ffmpeg core loaded");
 
   const finalNames = [];
   for (let i = 0; i < sceneUrls.length; i++) {
     const vName = `scene${i}.mp4`;
+    stitchLog(`mixSfxAndStitch: scene ${i + 1}/${sceneUrls.length} — normalizing`);
     // Normalize on load, same as stitchVideoClips — scenes here can mix
     // Kling v1.6 (silent beats) and AI Avatar v2 (spoken lines) clips, whose
     // resolution/fps/duration specs genuinely differ between models. Doing
@@ -1919,7 +1990,9 @@ async function mixSfxAndStitch(sceneUrls, sfxAudioUrls, onProgress, opts = {}) {
         const sName = `sfx${i}.mp3`;
         const outName = `mixed${i}.mp4`;
         try {
+          stitchLog(`mixSfxAndStitch: scene ${i + 1} — downloading SFX clip`);
           await ffmpeg.writeFile(sName, await fetchFileWithTimeout(fetchFile, sfxAudioUrls[i], `Downloading ${sName}`));
+          stitchLog(`mixSfxAndStitch: scene ${i + 1} — amixing SFX into embedded audio`);
           // vName's audio here may be AI Avatar v2's own embedded track
           // (already normalized/re-encoded to plain aac/44.1kHz/stereo by
           // normalizeVideoClip above, so it's not the raw model output at
@@ -1950,11 +2023,13 @@ async function mixSfxAndStitch(sceneUrls, sfxAudioUrls, onProgress, opts = {}) {
             ],
             `Mixing SFX into scene ${i + 1}`
           );
+          stitchLog(`mixSfxAndStitch: scene ${i + 1} — amix done`);
           finalNames.push(outName);
           continue;
-        } catch {
+        } catch (err) {
           // Fall through to using the unmixed scene clip below — a failed mix
           // for one scene shouldn't sink the whole video.
+          stitchLog(`mixSfxAndStitch: scene ${i + 1} — amix failed, using unmixed clip instead: ${err && err.message}`);
         }
       }
       finalNames.push(vName);
@@ -1967,6 +2042,7 @@ async function mixSfxAndStitch(sceneUrls, sfxAudioUrls, onProgress, opts = {}) {
     const outName = `withaudio${i}.mp4`;
     if (sfxAudioUrls[i]) {
       const sName = `sfx${i}.mp3`;
+      stitchLog(`mixSfxAndStitch: scene ${i + 1} — downloading SFX-only clip (no embedded audio on this scene)`);
       await ffmpeg.writeFile(sName, await fetchFileWithTimeout(fetchFile, sfxAudioUrls[i], `Downloading ${sName}`));
       await execWithTimeout(
         ffmpeg,
@@ -1974,31 +2050,39 @@ async function mixSfxAndStitch(sceneUrls, sfxAudioUrls, onProgress, opts = {}) {
         `Attaching SFX-only audio to scene ${i + 1}`
       );
     } else {
+      stitchLog(`mixSfxAndStitch: scene ${i + 1} — attaching synthetic silence (no embedded audio, no SFX)`);
       await execWithTimeout(
         ffmpeg,
         ["-i", vName, "-filter_complex", "aevalsrc=0:d=10:s=44100[a]", "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-shortest", outName],
         `Attaching silent audio to scene ${i + 1}`
       );
     }
+    stitchLog(`mixSfxAndStitch: scene ${i + 1}/${sceneUrls.length} — done`);
     finalNames.push(outName);
   }
 
   if (finalNames.length === 1) {
+    stitchLog("mixSfxAndStitch: single scene, skipping concat");
     const data = await ffmpeg.readFile(finalNames[0]);
     return URL.createObjectURL(new Blob([data.buffer], { type: "video/mp4" }));
   }
 
+  stitchLog(`mixSfxAndStitch: concatenating ${finalNames.length} normalized scene(s)`);
   const listContent = finalNames.map((n) => `file '${n}'`).join("\n");
   await ffmpeg.writeFile("list.txt", listContent);
   try {
     await execWithTimeout(ffmpeg, ["-f", "concat", "-safe", "0", "-i", "list.txt", "-c", "copy", "output.mp4"], "Final concat");
-  } catch {
+    stitchLog("mixSfxAndStitch: fast concat succeeded");
+  } catch (err) {
+    stitchLog(`mixSfxAndStitch: fast concat failed (${err && err.message}), falling back to filter_complex re-encode`);
     const inputArgs = finalNames.flatMap((n) => ["-i", n]);
     const filter = `${finalNames.map((_, i) => `[${i}:v:0][${i}:a:0]`).join("")}concat=n=${finalNames.length}:v=1:a=1[v][a]`;
     await execWithTimeout(ffmpeg, [...inputArgs, "-filter_complex", filter, "-map", "[v]", "-map", "[a]", "output.mp4"], "Final concat (fallback)");
+    stitchLog("mixSfxAndStitch: fallback concat succeeded");
   }
 
   const data = await ffmpeg.readFile("output.mp4");
+  stitchLog(`mixSfxAndStitch: done, output ${data.byteLength} bytes`);
   return URL.createObjectURL(new Blob([data.buffer], { type: "video/mp4" }));
 }
 
@@ -2260,12 +2344,18 @@ async function generateCartoonNarrationVideo() {
       setStatus("Generating sound effects…");
       const sfxAudioUrls = await generateSfxAudioClips(sfxDescriptions);
       setStatus("Mixing in sound effects and stitching the final video together…");
-      finalUrl = await mixSfxAndStitch(syncedUrls, sfxAudioUrls, (p) => setStatus(`Stitching… ${Math.round(p * 100)}%`));
+      stitchLog("Narration: entering mixSfxAndStitch");
+      finalUrl = await withOverallTimeout(
+        mixSfxAndStitch(syncedUrls, sfxAudioUrls, (p) => setStatus(`Stitching… ${Math.round(p * 100)}%`)),
+        "Mixing sound effects and stitching"
+      );
     } else {
       setStatus("Stitching the final video together…");
-      finalUrl = await stitchVideoClips(syncedUrls, (p) => setStatus(`Stitching… ${Math.round(p * 100)}%`), {
-        withAudio: true,
-      });
+      stitchLog("Narration: entering stitchVideoClips");
+      finalUrl = await withOverallTimeout(
+        stitchVideoClips(syncedUrls, (p) => setStatus(`Stitching… ${Math.round(p * 100)}%`), { withAudio: true }),
+        "Stitching the final video"
+      );
     }
 
     els.kidsProgress.classList.add("hidden");
@@ -2453,12 +2543,18 @@ async function generateCartoonSongVideo() {
       setStatus("Generating sound effects…");
       const sfxAudioUrls = await generateSfxAudioClips(sfxDescriptions);
       setStatus("Mixing in sound effects and stitching the final video together…");
-      finalUrl = await mixSfxAndStitch(syncedUrls, sfxAudioUrls, (p) => setStatus(`Stitching… ${Math.round(p * 100)}%`));
+      stitchLog("Song: entering mixSfxAndStitch");
+      finalUrl = await withOverallTimeout(
+        mixSfxAndStitch(syncedUrls, sfxAudioUrls, (p) => setStatus(`Stitching… ${Math.round(p * 100)}%`)),
+        "Mixing sound effects and stitching"
+      );
     } else {
       setStatus("Stitching the final video together…");
-      finalUrl = await stitchVideoClips(syncedUrls, (p) => setStatus(`Stitching… ${Math.round(p * 100)}%`), {
-        withAudio: true,
-      });
+      stitchLog("Song: entering stitchVideoClips");
+      finalUrl = await withOverallTimeout(
+        stitchVideoClips(syncedUrls, (p) => setStatus(`Stitching… ${Math.round(p * 100)}%`), { withAudio: true }),
+        "Stitching the final video"
+      );
     }
 
     els.kidsProgress.classList.add("hidden");
@@ -2903,14 +2999,20 @@ async function generateCartoonDialogueVideo() {
       const sfxAudioUrls = sfxDescriptions.some(Boolean) ? await generateSfxAudioClips(sfxDescriptions) : lines.map(() => null);
       if (sfxDescriptions.some(Boolean)) setStatus("Generating sound effects…");
       setStatus("Mixing in sound effects and stitching the final video together…");
-      finalUrl = await mixSfxAndStitch(syncedUrls, sfxAudioUrls, (p) => setStatus(`Stitching… ${Math.round(p * 100)}%`), {
-        baseHasAudio: lines.map((l) => !l.silent),
-      });
+      stitchLog(`Dialogue: entering mixSfxAndStitch (anySilent=${anySilent}, anySfx=${sfxDescriptions.some(Boolean)})`);
+      finalUrl = await withOverallTimeout(
+        mixSfxAndStitch(syncedUrls, sfxAudioUrls, (p) => setStatus(`Stitching… ${Math.round(p * 100)}%`), {
+          baseHasAudio: lines.map((l) => !l.silent),
+        }),
+        "Mixing sound effects and stitching"
+      );
     } else {
       setStatus("Stitching the final video together…");
-      finalUrl = await stitchVideoClips(syncedUrls, (p) => setStatus(`Stitching… ${Math.round(p * 100)}%`), {
-        withAudio: true,
-      });
+      stitchLog("Dialogue: entering stitchVideoClips");
+      finalUrl = await withOverallTimeout(
+        stitchVideoClips(syncedUrls, (p) => setStatus(`Stitching… ${Math.round(p * 100)}%`), { withAudio: true }),
+        "Stitching the final video"
+      );
     }
 
     els.kidsProgress.classList.add("hidden");
