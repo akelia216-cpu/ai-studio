@@ -2227,6 +2227,7 @@ async function buildDynamicScenePrompt(opts) {
     nonVerbal,
     bothScene,
     skipCameraMotion, // true for a scene that won't go through /api/generate at all (see build-scene-prompt.js)
+    establishedContext, // optional string from establishSharedContext() — fixed visual descriptions for objects/props that recur across multiple scenes
     fallback,
   } = opts;
   try {
@@ -2244,6 +2245,7 @@ async function buildDynamicScenePrompt(opts) {
         nonVerbal,
         bothScene,
         skipCameraMotion,
+        establishedContext,
       }),
     });
     const data = await res.json();
@@ -2251,6 +2253,35 @@ async function buildDynamicScenePrompt(opts) {
     return { prompt: data.prompt, matchedExpression: data.matchedExpression || null, cameraMotion: data.cameraMotion || "none" };
   } catch {
     return { prompt: fallback, matchedExpression: null, cameraMotion: "none" };
+  }
+}
+
+// Cross-scene continuity pre-pass (see ESTABLISH_CONTEXT_INSTRUCTION in
+// api/build-scene-prompt.js for the full rationale). Called once per script
+// with every scene's plain text, in order, BEFORE any per-scene prompt is
+// written — its result is then handed to every buildDynamicScenePrompt call
+// below so a recurring object (e.g. something found in an early line and
+// referred back to later) gets one fixed, shared visual description instead
+// of a different invented one per scene. A failure here just falls back to
+// "" (today's fully-independent behavior) rather than blocking generation —
+// same nice-to-have philosophy as SFX auto-detection.
+async function establishSharedContext(lineTexts) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  try {
+    const res = await fetch("/api/build-scene-prompt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "establish-context", lines: lineTexts }),
+      signal: controller.signal,
+    });
+    if (!res.ok) return "";
+    const data = await res.json().catch(() => null);
+    return (data && data.establishedContext) || "";
+  } catch {
+    return "";
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -2331,6 +2362,12 @@ async function generateCartoonNarrationVideo() {
     });
     if (audioError || audioUrls.some((u) => !u)) throw new Error(audioError || "One or more narration lines failed.");
 
+    // 1.5. Same cross-scene continuity pre-pass used by Dialogue mode — see
+    // establishSharedContext() and ESTABLISH_CONTEXT_INSTRUCTION in
+    // api/build-scene-prompt.js. Without it, each chunk below gets its scene
+    // prompt written in total isolation from every other chunk.
+    const establishedContext = await establishSharedContext(chunks);
+
     // 2. Write a fresh scene prompt per line — has Pip actually act out what
     // the line describes, in a setting invented to match it, rather than the
     // same fixed backyard backdrop and a canned gesture every time.
@@ -2345,6 +2382,7 @@ async function generateCartoonNarrationVideo() {
         expression: null,
         styleDescription,
         backgroundDescription,
+        establishedContext,
         fallback: buildNarrationScenePrompt(i),
       })
     );
@@ -2984,6 +3022,16 @@ async function generateCartoonDialogueVideo() {
       throw new Error(audioError || "One or more dialogue lines failed to generate audio.");
     }
 
+    // 2.5. Look at the whole script once, up front, for any object/prop that
+    // gets referred to across more than one line (e.g. something found in
+    // one line and referred back to later) — without this, step 3 below
+    // writes each scene's prompt in complete isolation and a recurring
+    // object gets a different invented appearance in every scene it shows
+    // up in (confirmed real: the item a character picks up in an early
+    // scene not matching later scenes). See establishSharedContext() and
+    // ESTABLISH_CONTEXT_INSTRUCTION in api/build-scene-prompt.js.
+    const establishedContext = await establishSharedContext(lines.map((l) => (l.silent ? l.action : l.text)));
+
     // 3. Write a fresh scene prompt per line — has the speaking character
     // actually act out what the line describes, in a setting matching it
     // (or a fixed one, if given), rather than a generic "stands and talks"
@@ -3003,6 +3051,7 @@ async function generateCartoonDialogueVideo() {
         availableExpressions,
         nonVerbal: line.silent,
         bothScene: line.bothScene,
+        establishedContext,
         // Spoken lines are routed to Kling's AI Avatar v2 (see step 4 below)
         // instead of /api/generate, which has no camera-motion parameter at
         // all — so camera-motion selection is skipped entirely for them,
