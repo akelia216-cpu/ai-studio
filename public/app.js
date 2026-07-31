@@ -3,7 +3,7 @@
 // the latest file actually made it to production — that mismatch has been
 // the root cause of more than one "the fix didn't work" report in this
 // project's history.
-const APP_BUILD = "2026-07-31-ffmpeg-worker-sameorigin-1";
+const APP_BUILD = "2026-07-31-error-logging-1";
 console.log(`[AI Studio] app.js build ${APP_BUILD} loaded`);
 
 // Timestamped console breadcrumb for the sound-effect/stitch pipeline
@@ -1701,7 +1701,15 @@ async function generateKidsSong() {
     });
     setStatus("Done.", "success");
   } catch (err) {
-    setStatus(err.message || "Something went wrong.", "error");
+    // Always log the real error — every one of these top-level catch blocks
+    // used to swallow it, showing only a generic "Something went wrong." in
+    // the UI with nothing in the console to diagnose from. `err` itself is
+    // logged (not just err.message) since a non-Error rejection (undefined,
+    // a plain string, a DOM event) can have no usable .message at all —
+    // that shape is itself a useful clue, so it needs to actually be visible.
+    stitchLog("Top-level catch — real error was:", err);
+    console.error(err);
+    setStatus((err && err.message) || "Something went wrong.", "error");
   }
 }
 
@@ -2419,7 +2427,15 @@ async function generateCartoonNarrationVideo() {
     });
     setStatus("Done — download it from the gallery before refreshing the page.", "success");
   } catch (err) {
-    setStatus(err.message || "Something went wrong.", "error");
+    // Always log the real error — every one of these top-level catch blocks
+    // used to swallow it, showing only a generic "Something went wrong." in
+    // the UI with nothing in the console to diagnose from. `err` itself is
+    // logged (not just err.message) since a non-Error rejection (undefined,
+    // a plain string, a DOM event) can have no usable .message at all —
+    // that shape is itself a useful clue, so it needs to actually be visible.
+    stitchLog("Top-level catch — real error was:", err);
+    console.error(err);
+    setStatus((err && err.message) || "Something went wrong.", "error");
   }
 }
 
@@ -2618,7 +2634,15 @@ async function generateCartoonSongVideo() {
     });
     setStatus("Done — download it from the gallery before refreshing the page. Scene cuts may not line up perfectly with the beat; that's a limit of stitching independently-timed clips.", "success");
   } catch (err) {
-    setStatus(err.message || "Something went wrong.", "error");
+    // Always log the real error — every one of these top-level catch blocks
+    // used to swallow it, showing only a generic "Something went wrong." in
+    // the UI with nothing in the console to diagnose from. `err` itself is
+    // logged (not just err.message) since a non-Error rejection (undefined,
+    // a plain string, a DOM event) can have no usable .message at all —
+    // that shape is itself a useful clue, so it needs to actually be visible.
+    stitchLog("Top-level catch — real error was:", err);
+    console.error(err);
+    setStatus((err && err.message) || "Something went wrong.", "error");
   }
 }
 
@@ -3076,7 +3100,15 @@ async function generateCartoonDialogueVideo() {
     });
     setStatus("Done — download it from the gallery before refreshing the page.", "success");
   } catch (err) {
-    setStatus(err.message || "Something went wrong.", "error");
+    // Always log the real error — every one of these top-level catch blocks
+    // used to swallow it, showing only a generic "Something went wrong." in
+    // the UI with nothing in the console to diagnose from. `err` itself is
+    // logged (not just err.message) since a non-Error rejection (undefined,
+    // a plain string, a DOM event) can have no usable .message at all —
+    // that shape is itself a useful clue, so it needs to actually be visible.
+    stitchLog("Top-level catch — real error was:", err);
+    console.error(err);
+    setStatus((err && err.message) || "Something went wrong.", "error");
   }
 }
 
