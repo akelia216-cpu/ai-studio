@@ -3,7 +3,7 @@
 // the latest file actually made it to production — that mismatch has been
 // the root cause of more than one "the fix didn't work" report in this
 // project's history.
-const APP_BUILD = "2026-07-30-stitch-diagnostics-1";
+const APP_BUILD = "2026-07-31-ffmpeg-load-timeout-1";
 console.log(`[AI Studio] app.js build ${APP_BUILD} loaded`);
 
 // Timestamped console breadcrumb for the sound-effect/stitch pipeline
@@ -1029,9 +1029,34 @@ async function generateOneSceneClip(sceneText, opts) {
   }
 }
 
+// Races an arbitrary promise (module import, CDN fetch, wasm init — anything
+// with no built-in timeout of its own) against a hard time limit, so a stuck
+// network request fails loudly and names itself instead of hanging silently
+// forever. Same idea as execWithTimeout/fetchFileWithTimeout below, just not
+// tied to an ffmpeg instance specifically.
+function withTimeoutPromise(promise, label, ms = 60000) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${Math.round(ms / 1000)}s.`)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 async function loadFFmpeg(onProgress) {
-  const { FFmpeg } = await import("https://esm.sh/@ffmpeg/ffmpeg@0.12.10");
-  const { fetchFile, toBlobURL } = await import("https://esm.sh/@ffmpeg/util@0.12.1");
+  // Every stitching path (stitchVideoClips, mixSfxAndStitch) calls this
+  // first, before any of their own stitchLog breadcrumbs fire. It was the
+  // one step in the whole stitching pipeline with *no* timeout at all —
+  // everything downstream (ffmpeg.exec calls, clip downloads) got timeout
+  // protection in earlier fixes, but loading the ffmpeg engine itself never
+  // did. It depends on five separate network fetches across two external
+  // CDNs (esm.sh, unpkg.com); any one of them stalling — a slow response, a
+  // flaky CDN, anything — hung this function forever with zero error and
+  // zero console output, which is exactly the "goes quiet and never comes
+  // back" symptom seen after the "mixSfxAndStitch: start..." log line.
+  stitchLog("loadFFmpeg: importing ffmpeg/util modules");
+  const { FFmpeg } = await withTimeoutPromise(import("https://esm.sh/@ffmpeg/ffmpeg@0.12.10"), "Loading the ffmpeg module");
+  const { fetchFile, toBlobURL } = await withTimeoutPromise(import("https://esm.sh/@ffmpeg/util@0.12.1"), "Loading the ffmpeg util module");
+  stitchLog("loadFFmpeg: modules imported, fetching core/wasm/worker files");
 
   const ffmpeg = new FFmpeg();
   if (onProgress) ffmpeg.on("progress", ({ progress }) => onProgress(progress));
@@ -1046,11 +1071,20 @@ async function loadFFmpeg(onProgress) {
   // URL there); unpkg serves the package's raw files unchanged, so pull the
   // worker script from there instead.
   const workerBase = "https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/esm";
-  await ffmpeg.load({
-    coreURL: await toBlobURL(`${base}/ffmpeg-core.js`, "text/javascript"),
-    wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`, "application/wasm"),
-    classWorkerURL: await toBlobURL(`${workerBase}/worker.js`, "text/javascript"),
-  });
+
+  // Fetched in parallel — no ordering dependency between the three files,
+  // and it means one slow resource doesn't serialize behind the others.
+  const [coreURL, wasmURL, classWorkerURL] = await Promise.all([
+    withTimeoutPromise(toBlobURL(`${base}/ffmpeg-core.js`, "text/javascript"), "Fetching ffmpeg-core.js"),
+    // The wasm binary is the largest of the three (~25-30MB) — give it more
+    // room than the others before calling it stuck.
+    withTimeoutPromise(toBlobURL(`${base}/ffmpeg-core.wasm`, "application/wasm"), "Fetching ffmpeg-core.wasm", 120000),
+    withTimeoutPromise(toBlobURL(`${workerBase}/worker.js`, "text/javascript"), "Fetching the ffmpeg worker script"),
+  ]);
+  stitchLog("loadFFmpeg: core/wasm/worker fetched, initializing the ffmpeg engine");
+
+  await withTimeoutPromise(ffmpeg.load({ coreURL, wasmURL, classWorkerURL }), "Initializing the ffmpeg engine", 90000);
+  stitchLog("loadFFmpeg: ffmpeg engine ready");
 
   return { ffmpeg, fetchFile };
 }
