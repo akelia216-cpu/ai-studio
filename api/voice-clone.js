@@ -5,10 +5,11 @@
 // Verified against fal's own API docs (fal-ai/minimax/voice-clone):
 // POST body needs { audio_url } (the sample must be at least 10 seconds).
 // The result comes back as { custom_voice_id }, a string id that can be
-// passed straight into fal-ai/minimax/speech-02-hd's voice_setting.voice_id
+// passed straight into fal-ai/minimax/speech-2.8-hd's voice_setting.voice_id
 // field (api/tts.js already does this for any voiceId string it's given —
 // MiniMax's own docs confirm cloned voice ids work the same way as their
-// preset voice ids in that field).
+// preset voice ids in that field). Model bumped 2026-08 from speech-02-hd —
+// see tts.js's comment; cloned-voice-id behavior isn't expected to differ.
 const { getInputSchema, firstSupportedField, createPrediction } = require("./_fal");
 
 const VOICE_CLONE_MODEL = "fal-ai/minimax/voice-clone";
