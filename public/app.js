@@ -3,7 +3,7 @@
 // the latest file actually made it to production — that mismatch has been
 // the root cause of more than one "the fix didn't work" report in this
 // project's history.
-const APP_BUILD = "2026-07-31-core-sameorigin-1";
+const APP_BUILD = "2026-08-01-model-upgrades-1";
 console.log(`[AI Studio] app.js build ${APP_BUILD} loaded`);
 
 // Timestamped console breadcrumb for the sound-effect/stitch pipeline
@@ -18,12 +18,22 @@ function stitchLog(...args) {
 
 // Keep this in sync with api/_models.js (label + kind only — the backend
 // owns the actual parameter whitelist and schema introspection).
+// Entries added 2026-08 (flux-2-pro, minimax-hailuo-02-standard/pro,
+// kling-v2.6-pro, kling-v3-standard/pro) mirror api/_models.js exactly —
+// see that file's comments for what was verified about each. Schema-
+// verified only, not yet live-tested (fal balance was at zero when added).
 const MODELS = {
   "flux-schnell": { label: "Flux Schnell (fast)", kind: "image" },
   "flux-1.1-pro": { label: "Flux 1.1 Pro (high quality)", kind: "image" },
+  "flux-2-pro": { label: "Flux 2 Pro (newest)", kind: "image" },
   sdxl: { label: "Stable Diffusion XL", kind: "image" },
   "minimax-video-01": { label: "Minimax Video-01", kind: "video" },
+  "minimax-hailuo-02-standard": { label: "Minimax Hailuo-02 Standard (newer)", kind: "video" },
+  "minimax-hailuo-02-pro": { label: "Minimax Hailuo-02 Pro (newer, higher quality)", kind: "video" },
   "kling-v1.6-standard": { label: "Kling v1.6 Standard", kind: "video" },
+  "kling-v2.6-pro": { label: "Kling v2.6 Pro (newer)", kind: "video" },
+  "kling-v3-standard": { label: "Kling v3 Standard (newest)", kind: "video" },
+  "kling-v3-pro": { label: "Kling v3 Pro (newest, higher quality)", kind: "video" },
   "luma-ray-flash-2": { label: "Luma Ray Flash 2 (720p)", kind: "video" },
 };
 
