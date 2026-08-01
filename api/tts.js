@@ -1,6 +1,14 @@
 const { getInputSchema, firstSupportedField, createPrediction } = require("./_fal");
 
-const TTS_MODEL = "fal-ai/minimax/speech-02-hd";
+// Bumped 2026-08 from "speech-02-hd" — confirmed live via fal's openapi
+// schema endpoint that "speech-2.8-hd" exists and, critically, its
+// voice_id field's examples list still includes every voice this app uses
+// by name (Decent_Boy, Patient_Man, Wise_Woman, etc. — the full roster is
+// unchanged), so this is a safe drop-in upgrade that doesn't require
+// touching voices.js's voice list or any saved character voice selection.
+// Schema-verified only, not yet tested against a real generation — the
+// fal.ai key on this project had zero balance at the time this was changed.
+const TTS_MODEL = "fal-ai/minimax/speech-2.8-hd";
 
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
