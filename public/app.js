@@ -2119,6 +2119,10 @@ async function mixSfxAndStitch(sceneUrls, sfxAudioUrls, onProgress, opts = {}) {
               "[a]",
               "-c:v",
               "copy",
+              "-ar",
+              "44100",
+              "-ac",
+              "2",
               "-c:a",
               "aac",
               "-max_muxing_queue_size",
@@ -2144,21 +2148,59 @@ async function mixSfxAndStitch(sceneUrls, sfxAudioUrls, onProgress, opts = {}) {
     // No base audio track on this clip at all — attach the sound effect as
     // the sole audio track, or true silence if there isn't one, so it still
     // has an audio stream like every other clip in the list.
+    //
+    // CONFIRMED REAL BUG (2026-08), root-caused and reproduced in isolation
+    // outside the app before this fix: aevalsrc=0:d=10:s=44100 (the silent
+    // branch below) encodes as MONO by default, while every real-audio path
+    // above explicitly forces STEREO (-ac 2). The final concat step uses
+    // fast "-c copy" stream-copy concatenation, which does not re-encode or
+    // reconcile codec parameters between segments — concatenating a mono
+    // AAC segment next to stereo AAC segments corrupts audio decoding from
+    // that boundary onward, in real players, not just a theoretical risk:
+    // reproduced directly with plain ffmpeg (stereo tone -> mono silence ->
+    // stereo tone), and the resulting file only played audio for the FIRST
+    // segment — the second stereo segment's real tone came out as silence
+    // too, exactly matching the reported symptom ("talking does not play
+    // all the way through"). The fix is to force the exact same explicit
+    // spec (-ar 44100 -ac 2) on every audio-producing path in this
+    // function, with zero exceptions, so no segment can ever mismatch.
     const outName = `withaudio${i}.mp4`;
     if (sfxAudioUrls[i]) {
       const sName = `sfx${i}.mp3`;
       stitchLog(`mixSfxAndStitch: scene ${i + 1} — downloading SFX-only clip (no embedded audio on this scene)`);
       await ffmpeg.writeFile(sName, await fetchFileWithTimeout(fetchFile, sfxAudioUrls[i], `Downloading ${sName}`));
+      // The SFX mp3 (from ElevenLabs sound-effects) is not guaranteed to be
+      // stereo either — forcing -ar/-ac here too, not just on the silent
+      // branch, so this path can't reintroduce the same class of mismatch.
       await execWithTimeout(
         ffmpeg,
-        ["-i", vName, "-i", sName, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-shortest", outName],
+        ["-i", vName, "-i", sName, "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-ar", "44100", "-ac", "2", "-c:a", "aac", "-shortest", outName],
         `Attaching SFX-only audio to scene ${i + 1}`
       );
     } else {
       stitchLog(`mixSfxAndStitch: scene ${i + 1} — attaching synthetic silence (no embedded audio, no SFX)`);
       await execWithTimeout(
         ffmpeg,
-        ["-i", vName, "-filter_complex", "aevalsrc=0:d=10:s=44100[a]", "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-shortest", outName],
+        [
+          "-i",
+          vName,
+          "-filter_complex",
+          "aevalsrc=0:d=10:s=44100[a]",
+          "-map",
+          "0:v",
+          "-map",
+          "[a]",
+          "-c:v",
+          "copy",
+          "-ar",
+          "44100",
+          "-ac",
+          "2",
+          "-c:a",
+          "aac",
+          "-shortest",
+          outName,
+        ],
         `Attaching silent audio to scene ${i + 1}`
       );
     }
