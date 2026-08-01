@@ -1,6 +1,11 @@
 const { getInputSchema, firstSupportedField, resolveNestedProperty } = require("./_fal");
 
-const TTS_MODEL = "fal-ai/minimax/speech-02-hd";
+// Kept in sync with tts.js — see that file's comment for why this was
+// bumped from "speech-02-hd" to "speech-2.8-hd" (confirmed live: same voice
+// roster via voice_id's "examples" list, so this file's existing
+// enum-or-examples fallback logic below picks it up with no other changes
+// needed).
+const TTS_MODEL = "fal-ai/minimax/speech-2.8-hd";
 
 // Heuristic split of the model's own voice catalog into "kid-sounding" vs
 // "adult-sounding" buckets, based on naming patterns Minimax uses in its
