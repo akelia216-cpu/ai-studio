@@ -47,6 +47,27 @@ const MODELS = {
       negativePrompt: ["negative_prompt"],
     },
   },
+  // Added 2026-08 — confirmed live via fal's own openapi schema endpoint
+  // (fal-ai/flux-2-pro returns a real "Flux2ProInput" schema with
+  // image_size/prompt/output_format/seed, same shape as the other Flux
+  // entries above, so the existing aspectRatio/imageSize candidates cover
+  // it without change). Newest Flux generation available on fal as of this
+  // check — Flux 1.1 Pro above is kept as a cheaper/older option, not
+  // removed. NOTE: schema-verified only, not yet tested against a real
+  // generation — the fal.ai key on this project had zero balance at the
+  // time this was added, so image-quality output hasn't been confirmed live.
+  "flux-2-pro": {
+    label: "Flux 2 Pro (newest)",
+    kind: "image",
+    falModel: "fal-ai/flux-2-pro",
+    defaults: {},
+    candidates: {
+      aspectRatio: ["aspect_ratio"],
+      imageSize: ["image_size"],
+      seed: ["seed"],
+      negativePrompt: ["negative_prompt"],
+    },
+  },
 
   // ---- Video ----
   "minimax-video-01": {
@@ -54,6 +75,40 @@ const MODELS = {
     kind: "video",
     falModel: "fal-ai/minimax/video-01",
     falModelImageToVideo: "fal-ai/minimax/video-01/image-to-video",
+    defaults: { prompt_optimizer: true },
+    candidates: {
+      startImage: ["image_url", "first_frame_image", "start_image", "image"],
+      endImage: ["last_frame_image", "end_image", "tail_image"],
+      referenceImage: ["subject_reference"],
+      seed: ["seed"],
+    },
+    supportsCameraObject: false,
+  },
+  // Added 2026-08 — Minimax's video line moved on from "video-01" to
+  // "Hailuo-02" (standard/pro), confirmed live via fal's openapi schema
+  // endpoint. Hailuo-02's image-to-video Input schema uses "image_url" for
+  // the source frame (same field name video-01 already used), so the
+  // existing candidates list is reused as-is. Schema-verified only — see
+  // the flux-2-pro note above re: no live generation test yet possible.
+  "minimax-hailuo-02-standard": {
+    label: "Minimax Hailuo-02 Standard (newer)",
+    kind: "video",
+    falModel: "fal-ai/minimax/hailuo-02/standard/text-to-video",
+    falModelImageToVideo: "fal-ai/minimax/hailuo-02/standard/image-to-video",
+    defaults: { prompt_optimizer: true },
+    candidates: {
+      startImage: ["image_url", "first_frame_image", "start_image", "image"],
+      endImage: ["last_frame_image", "end_image", "tail_image"],
+      referenceImage: ["subject_reference"],
+      seed: ["seed"],
+    },
+    supportsCameraObject: false,
+  },
+  "minimax-hailuo-02-pro": {
+    label: "Minimax Hailuo-02 Pro (newer, higher quality)",
+    kind: "video",
+    falModel: "fal-ai/minimax/hailuo-02/pro/text-to-video",
+    falModelImageToVideo: "fal-ai/minimax/hailuo-02/pro/image-to-video",
     defaults: { prompt_optimizer: true },
     candidates: {
       startImage: ["image_url", "first_frame_image", "start_image", "image"],
@@ -86,6 +141,61 @@ const MODELS = {
     // structured support this endpoint doesn't have; camera motion for this
     // model always goes through the plain prompt-text clause fallback, which
     // already works correctly on its own.
+    supportsCameraObject: false,
+  },
+  // Added 2026-08 — three Kling generations newer than v1.6 (v2.0 Master,
+  // v2.1, v2.5 Turbo skipped as intermediate/lesser options; v2.6 Pro and
+  // v3 are the two confirmed-live tiers worth surfacing). Confirmed live via
+  // fal's openapi schema endpoint for both the text-to-video and
+  // image-to-video variant of each. IMPORTANT verified difference from
+  // v1.6: the image-input field on v2.6/v3 is "start_image_url", NOT
+  // "image_url" — v1.6's candidates list above doesn't have that entry
+  // because v1.6 doesn't use it, so it's listed first here for these three.
+  // Neither v2.6 nor v3's Input schema exposes a "camera_control" field
+  // either (checked the same way as v1.6 above), so supportsCameraObject
+  // stays false and camera motion still goes through the prompt-text clause
+  // fallback for these too. v3's schema also exposes "generate_audio" and
+  // "elements" (multi-character reference) fields this app doesn't wire up
+  // yet — left alone for now, not required for existing functionality.
+  // Schema-verified only — see the flux-2-pro note above re: no live
+  // generation test yet possible (fal balance was at zero).
+  "kling-v2.6-pro": {
+    label: "Kling v2.6 Pro (newer)",
+    kind: "video",
+    falModel: "fal-ai/kling-video/v2.6/pro/text-to-video",
+    falModelImageToVideo: "fal-ai/kling-video/v2.6/pro/image-to-video",
+    defaults: { duration: "5" },
+    candidates: {
+      startImage: ["start_image_url", "image_url", "start_image", "first_frame_image", "image"],
+      endImage: ["end_image_url", "tail_image_url", "end_image", "tail_image", "last_frame_image"],
+      seed: ["seed"],
+    },
+    supportsCameraObject: false,
+  },
+  "kling-v3-standard": {
+    label: "Kling v3 Standard (newest)",
+    kind: "video",
+    falModel: "fal-ai/kling-video/v3/standard/text-to-video",
+    falModelImageToVideo: "fal-ai/kling-video/v3/standard/image-to-video",
+    defaults: { duration: "5" },
+    candidates: {
+      startImage: ["start_image_url", "image_url", "start_image", "first_frame_image", "image"],
+      endImage: ["end_image_url", "tail_image_url", "end_image", "tail_image", "last_frame_image"],
+      seed: ["seed"],
+    },
+    supportsCameraObject: false,
+  },
+  "kling-v3-pro": {
+    label: "Kling v3 Pro (newest, higher quality)",
+    kind: "video",
+    falModel: "fal-ai/kling-video/v3/pro/text-to-video",
+    falModelImageToVideo: "fal-ai/kling-video/v3/pro/image-to-video",
+    defaults: { duration: "5" },
+    candidates: {
+      startImage: ["start_image_url", "image_url", "start_image", "first_frame_image", "image"],
+      endImage: ["end_image_url", "tail_image_url", "end_image", "tail_image", "last_frame_image"],
+      seed: ["seed"],
+    },
     supportsCameraObject: false,
   },
   "luma-ray-flash-2": {
