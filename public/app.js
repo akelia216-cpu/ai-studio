@@ -1176,18 +1176,39 @@ async function execWithTimeout(ffmpeg, args, label, ms = 300000) {
 // cancel the underlying network request, but racing it against a timer
 // still means the app stops waiting and reports a clear, specific error
 // instead of sitting stuck with nothing to show for it.
-async function fetchFileWithTimeout(fetchFile, url, label, ms = 120000) {
-  let timer;
-  const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => {
-      reject(new Error(`${label} took longer than ${Math.round(ms / 1000)}s to download — the source URL may be slow, unreachable, or stalled.`));
-    }, ms);
-  });
-  try {
-    return await Promise.race([fetchFile(url), timeout]);
-  } finally {
-    clearTimeout(timer);
+// retries: how many EXTRA attempts to make after the first one fails (so
+// retries=1 means 2 attempts total). Added after a real, confirmed one-off
+// case: a scene's download stalled and hit this exact 120s timeout, but
+// re-fetching that same URL moments later succeeded in ~1s — the file and
+// server were fine, it was just a transient stall. This retry gives that
+// kind of one-off blip a second chance with a fresh timeout window instead
+// of failing the whole generation over something that clears up on its own
+// a moment later. Each failed attempt is logged so a real, persistent
+// problem (every attempt failing) is still fully visible in the console,
+// not silently retried into an even longer hang.
+async function fetchFileWithTimeout(fetchFile, url, label, ms = 120000, retries = 1) {
+  let lastErr;
+  for (let attempt = 1; attempt <= retries + 1; attempt++) {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        reject(new Error(`${label} took longer than ${Math.round(ms / 1000)}s to download — the source URL may be slow, unreachable, or stalled.`));
+      }, ms);
+    });
+    try {
+      const result = await Promise.race([fetchFile(url), timeout]);
+      if (attempt > 1) stitchLog(`${label}: succeeded on retry attempt ${attempt}`);
+      return result;
+    } catch (err) {
+      lastErr = err;
+      const isLastAttempt = attempt === retries + 1;
+      stitchLog(`${label}: attempt ${attempt}/${retries + 1} failed — ${err.message}${isLastAttempt ? "" : " — retrying"}`);
+      if (!isLastAttempt) await new Promise((r) => setTimeout(r, 2000));
+    } finally {
+      clearTimeout(timer);
+    }
   }
+  throw lastErr;
 }
 
 // Last-resort backstop around the ENTIRE sound-effect/stitch stage, on top
