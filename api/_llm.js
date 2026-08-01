@@ -4,7 +4,31 @@ const { getInputSchema, firstSupportedField, createPrediction, getPrediction } =
 // underlying model isn't baked into the endpoint path; it must be passed as
 // an explicit `model` field in the request input.
 const LLM_MODEL = "fal-ai/any-llm";
-const LLM_UNDERLYING_MODEL = "meta-llama/llama-3.2-3b-instruct";
+
+// Bumped 2026-08 from "meta-llama/llama-3.2-3b-instruct". That 3B model is
+// exactly what forced this session's whole run of SFX-detection and
+// scene-prompt-continuity fixes (api/detect-sfx.js, api/build-scene-prompt.js)
+// to exist in the first place — it kept pattern-matching onto instruction
+// examples and hallucinating actions/objects that weren't in the input text,
+// which is a small-model failure mode, not something more prompt tuning
+// alone was ever going to fully close out.
+//
+// Confirmed live via fal-ai/any-llm's own openapi schema: "google/gemini-2.5-
+// flash-lite" is fal's OWN current default model for this exact endpoint
+// (schema field: model.default), and it's in the same standard pricing tier
+// as llama-3.2-3b-instruct was — NOT one of the endpoint's listed "premium"
+// models (those are charged at 10x and include gpt-4.1, claude-3.5-sonnet,
+// gemini-2.5-pro, etc. — gemini-2.5-flash-lite is not among them). This is
+// meaningfully more capable while costing the same per call.
+//
+// NOT yet live-tested against real requests — the fal.ai key on this
+// project had zero balance at the time this was changed (a partial live
+// comparison against the exact false-positive cases from this session's SFX
+// fixes was in progress when the balance ran out). Re-run those same cases
+// once the key has balance again to confirm this actually reduces
+// hallucination rate as expected, rather than just assuming it from the
+// model's general reputation.
+const LLM_UNDERLYING_MODEL = "google/gemini-2.5-flash-lite";
 
 const POLL_INTERVAL_MS = 1000;
 const POLL_TIMEOUT_MS = 45000; // LLM calls here are short (prompt rewrites, scene lists)
