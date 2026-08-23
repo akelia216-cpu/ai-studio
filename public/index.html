@@ -4,6 +4,10 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>AI Studio — Image &amp; Video Generator</title>
+<!-- Inline data-URI favicon — avoids a 404 console entry on every load for
+     the browser's automatic /favicon.ico request, which this project never
+     had a real icon file for. -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🎬</text></svg>" />
 <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
@@ -19,6 +23,10 @@
           <button class="mode-btn active" data-mode="image" type="button">Image</button>
           <button class="mode-btn" data-mode="video" type="button">Video</button>
           <button class="mode-btn" data-mode="lipsync" type="button">Lip Sync</button>
+          <button class="mode-btn" data-mode="restyle" type="button">Restyle Video</button>
+          <button class="mode-btn" data-mode="character" type="button">Character</button>
+          <button class="mode-btn" data-mode="inpaint" type="button">Inpaint</button>
+          <button class="mode-btn" data-mode="tools" type="button">Tools</button>
           <button class="mode-btn" data-mode="kids" type="button">Kids &amp; Songs</button>
         </div>
 
@@ -138,9 +146,9 @@
             <span>UGC / authentic style (skip the polished AI look)</span>
           </label>
           <div id="referenceImageField" class="field">
-            <span>Reference photo — product or person (optional)</span>
-            <input type="file" id="referenceImage" accept="image/*" />
-            <span class="hint">For images, this gets edited into the new scene (keeps it recognizable). For video, it's used as a character/subject reference if the model supports one.</span>
+            <span>Reference photo(s) — product or person (optional, up to 4)</span>
+            <input type="file" id="referenceImage" accept="image/*" multiple />
+            <span class="hint">For images, one photo gets edited into the new scene; two or more use a multi-image editing model that blends all of them in (e.g. a person + a product, or a character from two angles). For video, the first photo is used as a character/subject reference if the model supports one — on Kling v3 Standard/Pro with an Image → Video start frame, extra photos become additional angle shots for Kling's stronger "elements" identity binding.</span>
           </div>
 
           <details class="advanced">
@@ -167,6 +175,170 @@
             <input type="file" id="lipsyncAudio" accept="audio/*" />
           </label>
           <span class="hint">Keep clips short (a few seconds) — large files may fail to upload on the free hosting tier.</span>
+        </div>
+
+        <!-- Restyle Video only -->
+        <div id="restyleControls" class="hidden">
+          <label class="field">
+            <span>Source video (the clip whose motion you want to keep)</span>
+            <input type="file" id="restyleVideo" accept="video/*" />
+          </label>
+          <label class="field">
+            <span>New style / look</span>
+            <textarea id="restylePrompt" rows="4" placeholder="e.g. vibrant kids-cartoon illustration style, bold outlines, bright flat colors"></textarea>
+            <span class="hint">Describe the new visual style — the original motion is kept, everything else is re-rendered to match this.</span>
+          </label>
+          <label class="field">
+            <span>What to preserve from the source</span>
+            <select id="restyleTask">
+              <option value="depth" selected>Full motion &amp; composition (depth-guided)</option>
+              <option value="pose">Just the person's pose (best for a big style jump, e.g. live-action → cartoon)</option>
+            </select>
+          </label>
+          <label class="field">
+            <span>Aspect ratio</span>
+            <select id="restyleAspectRatio">
+              <option value="auto" selected>Match source</option>
+              <option value="16:9">Landscape (16:9)</option>
+              <option value="9:16">Portrait (9:16)</option>
+              <option value="1:1">Square (1:1)</option>
+            </select>
+          </label>
+          <details class="advanced">
+            <summary>Advanced</summary>
+            <label class="field">
+              <span>Negative prompt</span>
+              <input type="text" id="restyleNegativePrompt" placeholder="blurry, low quality, watermark..." />
+            </label>
+            <label class="field">
+              <span>Resolution</span>
+              <select id="restyleResolution">
+                <option value="auto" selected>Auto</option>
+                <option value="480p">480p</option>
+                <option value="720p">720p</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>Seed (optional, for repeatable results)</span>
+              <input type="number" id="restyleSeed" placeholder="Leave blank for random" />
+            </label>
+          </details>
+          <span class="hint">This can take several minutes and is priced per second of source video by fal.ai — keep the source clip short.</span>
+        </div>
+
+        <!-- Character (face consistency) only -->
+        <div id="characterControls" class="hidden">
+          <label class="field">
+            <span>Reference face photo</span>
+            <input type="file" id="characterFaceImage" accept="image/*" />
+            <span class="hint">A clear, front-facing photo works best.</span>
+          </label>
+          <label class="field">
+            <span>Scene / pose for this character</span>
+            <textarea id="characterPrompt" rows="4" placeholder="e.g. standing in a sunny park, waving at the camera, cartoon illustration style"></textarea>
+          </label>
+          <label class="field">
+            <span>Engine</span>
+            <select id="characterModel">
+              <option value="instantid" selected>InstantID (recommended)</option>
+              <option value="photomaker">PhotoMaker</option>
+            </select>
+          </label>
+          <details class="advanced">
+            <summary>Advanced</summary>
+            <label class="field">
+              <span>Negative prompt</span>
+              <input type="text" id="characterNegativePrompt" placeholder="blurry, low quality, watermark..." />
+            </label>
+            <label class="field">
+              <span>Seed (optional, for repeatable results)</span>
+              <input type="number" id="characterSeed" placeholder="Leave blank for random" />
+            </label>
+          </details>
+          <span class="hint">Generates a new image that keeps this face's identity — download it and use it as a "Start frame" in Video mode to animate this exact character.</span>
+        </div>
+
+        <!-- Inpaint (brush-based editing) only -->
+        <div id="inpaintControls" class="hidden">
+          <label class="field">
+            <span>Image to edit</span>
+            <input type="file" id="inpaintImage" accept="image/*" />
+          </label>
+          <div id="inpaintCanvasWrap" class="hidden">
+            <span class="hint">Paint over the area you want to change, then describe what should appear there.</span>
+            <div class="inpaint-canvas-stack">
+              <canvas id="inpaintImageCanvas"></canvas>
+              <canvas id="inpaintMaskCanvas"></canvas>
+            </div>
+            <div class="two-col">
+              <label class="field">
+                <span>Brush size</span>
+                <input type="range" id="inpaintBrushSize" min="8" max="80" value="30" />
+              </label>
+              <button type="button" class="text-btn" id="inpaintClearBtn">Clear mask</button>
+            </div>
+          </div>
+          <label class="field">
+            <span>What should appear in the painted area</span>
+            <textarea id="inpaintPrompt" rows="3" placeholder="e.g. a red baseball cap"></textarea>
+          </label>
+        </div>
+
+        <!-- Tools: standalone audio utilities that don't fit the main gen flow -->
+        <div id="toolsControls" class="hidden">
+          <div class="mode-toggle small" role="tablist">
+            <button class="tools-submode-btn active" data-toolsmode="ambient" type="button">Video → Sound</button>
+            <button class="tools-submode-btn" data-toolsmode="music" type="button">Instrumental Music</button>
+            <button class="tools-submode-btn" data-toolsmode="transcribe" type="button">Transcribe</button>
+            <button class="tools-submode-btn" data-toolsmode="segment" type="button">Isolate Object</button>
+          </div>
+
+          <div id="toolsAmbientControls">
+            <label class="field">
+              <span>Source video</span>
+              <input type="file" id="ambientVideo" accept="video/*" />
+            </label>
+            <label class="field">
+              <span>Nudge (optional)</span>
+              <input type="text" id="ambientPrompt" placeholder="e.g. footsteps on gravel, birds chirping" />
+              <span class="hint">This model looks at the video itself to generate matching sound — a text nudge is optional, not required.</span>
+            </label>
+          </div>
+
+          <div id="toolsMusicControls" class="hidden">
+            <label class="field">
+              <span>Mood / style</span>
+              <textarea id="musicPrompt" rows="3" placeholder="e.g. gentle upbeat ukulele, playful and warm, kids' show underscore"></textarea>
+              <span class="hint">Plain instrumental — no lyrics needed. For a full song with lyrics, use Kids &amp; Songs → Song instead.</span>
+            </label>
+            <label class="field">
+              <span>Length (seconds)</span>
+              <input type="number" id="musicDuration" value="30" min="1" max="190" />
+            </label>
+          </div>
+
+          <div id="toolsTranscribeControls" class="hidden">
+            <label class="field">
+              <span>Audio or video file</span>
+              <input type="file" id="transcribeFile" accept="audio/*,video/*" />
+            </label>
+            <label class="field checkbox-field">
+              <input type="checkbox" id="transcribeDiarize" />
+              <span>Identify different speakers</span>
+            </label>
+          </div>
+
+          <div id="toolsSegmentControls" class="hidden">
+            <label class="field">
+              <span>Source video</span>
+              <input type="file" id="segmentVideo" accept="video/*" />
+            </label>
+            <div id="segmentCanvasWrap" class="hidden">
+              <span class="hint">Click the object on the first frame you want to isolate/track through the video.</span>
+              <canvas id="segmentCanvas"></canvas>
+              <span class="hint" id="segmentPointHint"></span>
+            </div>
+          </div>
         </div>
 
         <!-- Shared lip-sync engine choice — used here AND by every Kids &
