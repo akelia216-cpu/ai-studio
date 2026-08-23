@@ -345,3 +345,48 @@ input[type="file"] {
 .card.failed .card-media { color: var(--danger); font-size: 13px; padding: 12px; text-align: center; }
 
 .empty-state { color: var(--muted); font-size: 14px; grid-column: 1 / -1; text-align: center; padding: 40px 0; }
+
+/* Inpaint mask-painting canvas stack — image canvas underneath, a
+   semi-transparent mask canvas on top that the user paints on directly. */
+.inpaint-canvas-stack {
+  position: relative;
+  width: 100%;
+  max-width: 480px;
+  margin: 8px 0;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  overflow: hidden;
+  line-height: 0;
+}
+.inpaint-canvas-stack canvas {
+  width: 100%;
+  display: block;
+  cursor: crosshair;
+}
+#inpaintMaskCanvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  opacity: 0.55;
+}
+
+.transcript-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text, #e6e6e6);
+  max-height: 220px;
+  overflow-y: auto;
+  margin: 0;
+}
+
+#segmentCanvas {
+  width: 100%;
+  max-width: 480px;
+  display: block;
+  margin: 8px 0;
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  cursor: crosshair;
+}
