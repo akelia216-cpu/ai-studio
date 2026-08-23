@@ -3,7 +3,7 @@
 // the latest file actually made it to production — that mismatch has been
 // the root cause of more than one "the fix didn't work" report in this
 // project's history.
-const APP_BUILD = "2026-08-01-model-upgrades-1";
+const APP_BUILD = "2026-08-01-multi-reference-images-1";
 console.log(`[AI Studio] app.js build ${APP_BUILD} loaded`);
 
 // Timestamped console breadcrumb for the sound-effect/stitch pipeline
@@ -27,20 +27,47 @@ const MODELS = {
   "flux-1.1-pro": { label: "Flux 1.1 Pro (high quality)", kind: "image" },
   "flux-2-pro": { label: "Flux 2 Pro (newest)", kind: "image" },
   sdxl: { label: "Stable Diffusion XL", kind: "image" },
+  "seedream-v4": { label: "Bytedance Seedream v4 (newer)", kind: "image" },
   "minimax-video-01": { label: "Minimax Video-01", kind: "video" },
   "minimax-hailuo-02-standard": { label: "Minimax Hailuo-02 Standard (newer)", kind: "video" },
   "minimax-hailuo-02-pro": { label: "Minimax Hailuo-02 Pro (newer, higher quality)", kind: "video" },
   "kling-v1.6-standard": { label: "Kling v1.6 Standard", kind: "video" },
+  "kling-v2.1-master": { label: "Kling v2.1 Master", kind: "video" },
   "kling-v2.6-pro": { label: "Kling v2.6 Pro (newer)", kind: "video" },
   "kling-v3-standard": { label: "Kling v3 Standard (newest)", kind: "video" },
   "kling-v3-pro": { label: "Kling v3 Pro (newest, higher quality)", kind: "video" },
   "luma-ray-flash-2": { label: "Luma Ray Flash 2 (720p)", kind: "video" },
+  "seedance-v1-pro": { label: "Bytedance Seedance v1 Pro (opt-in, higher quality)", kind: "video" },
+  "wan-25-preview": { label: "Wan 2.5 Preview (image-to-video)", kind: "video" },
+  "veo3": { label: "Google Veo 3 (premium, opt-in)", kind: "video" },
+  "veo3-fast": { label: "Google Veo 3 Fast (premium, cheaper/faster)", kind: "video" },
+  "sora-2": { label: "OpenAI Sora 2 (premium, opt-in)", kind: "video" },
 };
 
 const STORAGE_KEY = "ai-studio-history";
+
+// blob: URLs (from client-side ffmpeg stitching — see stitchVideoClips,
+// mixSfxAndStitch, and the audio-concat helper below) only stay valid for
+// the lifetime of the page that created them. History is persisted to
+// localStorage though, so after a refresh the gallery can end up holding a
+// blob: URL from a *previous* page load — the browser then fails to fetch
+// it (net::ERR_FILE_NOT_FOUND) and the <video>/<audio> element just renders
+// broken with no clear explanation, one failed request per stale item.
+// Every blob URL actually created in the CURRENT page load gets recorded
+// here, so renderGallery can tell a live blob apart from a stale one
+// synchronously — before ever trying to load it — and show a clear
+// "this expired" message instead of a broken player + console noise.
+const liveBlobUrls = new Set();
+function makeSessionBlobUrl(blob) {
+  const url = URL.createObjectURL(blob);
+  liveBlobUrls.add(url);
+  return url;
+}
 const MAX_INLINE_BYTES = 4 * 1024 * 1024; // ~4MB, safe under typical serverless body limits
 
-let mode = "image"; // image | video | lipsync | kids
+let mode = "image"; // image | video | lipsync | restyle | character | inpaint | tools | kids
+let toolsSubMode = "ambient"; // ambient | music | transcribe | segment
+let segmentPoint = null; // { x, y } in the segment canvas's native coordinate space
 let videoSubMode = "t2v"; // t2v | i2v
 let kidsSubMode = "story"; // story | song | cartoon
 let cartoonContentType = "song"; // song | narration | dialogue
@@ -163,6 +190,44 @@ const els = {
   lipsyncAudio: document.getElementById("lipsyncAudio"),
   lipsyncModelField: document.getElementById("lipsyncModelField"),
   lipsyncModel: document.getElementById("lipsyncModel"),
+  restyleControls: document.getElementById("restyleControls"),
+  restyleVideo: document.getElementById("restyleVideo"),
+  restylePrompt: document.getElementById("restylePrompt"),
+  restyleTask: document.getElementById("restyleTask"),
+  restyleAspectRatio: document.getElementById("restyleAspectRatio"),
+  restyleNegativePrompt: document.getElementById("restyleNegativePrompt"),
+  restyleResolution: document.getElementById("restyleResolution"),
+  restyleSeed: document.getElementById("restyleSeed"),
+  characterControls: document.getElementById("characterControls"),
+  characterFaceImage: document.getElementById("characterFaceImage"),
+  characterPrompt: document.getElementById("characterPrompt"),
+  characterModel: document.getElementById("characterModel"),
+  characterNegativePrompt: document.getElementById("characterNegativePrompt"),
+  characterSeed: document.getElementById("characterSeed"),
+  inpaintControls: document.getElementById("inpaintControls"),
+  inpaintImage: document.getElementById("inpaintImage"),
+  inpaintCanvasWrap: document.getElementById("inpaintCanvasWrap"),
+  inpaintImageCanvas: document.getElementById("inpaintImageCanvas"),
+  inpaintMaskCanvas: document.getElementById("inpaintMaskCanvas"),
+  inpaintBrushSize: document.getElementById("inpaintBrushSize"),
+  inpaintClearBtn: document.getElementById("inpaintClearBtn"),
+  inpaintPrompt: document.getElementById("inpaintPrompt"),
+  toolsControls: document.getElementById("toolsControls"),
+  toolsSubmodeBtns: document.querySelectorAll(".tools-submode-btn"),
+  toolsAmbientControls: document.getElementById("toolsAmbientControls"),
+  toolsMusicControls: document.getElementById("toolsMusicControls"),
+  toolsTranscribeControls: document.getElementById("toolsTranscribeControls"),
+  ambientVideo: document.getElementById("ambientVideo"),
+  ambientPrompt: document.getElementById("ambientPrompt"),
+  musicPrompt: document.getElementById("musicPrompt"),
+  musicDuration: document.getElementById("musicDuration"),
+  transcribeFile: document.getElementById("transcribeFile"),
+  transcribeDiarize: document.getElementById("transcribeDiarize"),
+  toolsSegmentControls: document.getElementById("toolsSegmentControls"),
+  segmentVideo: document.getElementById("segmentVideo"),
+  segmentCanvasWrap: document.getElementById("segmentCanvasWrap"),
+  segmentCanvas: document.getElementById("segmentCanvas"),
+  segmentPointHint: document.getElementById("segmentPointHint"),
   generateBtn: document.getElementById("generateBtn"),
   statusLine: document.getElementById("statusLine"),
   gallery: document.getElementById("gallery"),
@@ -234,6 +299,23 @@ els.kidsSubmodeBtns.forEach((btn) => {
   btn.addEventListener("click", () => {
     kidsSubMode = btn.dataset.kidsmode;
     applyKidsSubModeUI();
+  });
+});
+
+function applyToolsSubModeUI() {
+  els.toolsSubmodeBtns.forEach((b) => b.classList.toggle("active", b.dataset.toolsmode === toolsSubMode));
+  els.toolsAmbientControls.classList.toggle("hidden", toolsSubMode !== "ambient");
+  els.toolsMusicControls.classList.toggle("hidden", toolsSubMode !== "music");
+  els.toolsTranscribeControls.classList.toggle("hidden", toolsSubMode !== "transcribe");
+  els.toolsSegmentControls.classList.toggle("hidden", toolsSubMode !== "segment");
+  els.generateBtn.textContent =
+    toolsSubMode === "transcribe" ? "Transcribe" : toolsSubMode === "music" ? "Generate music" : toolsSubMode === "segment" ? "Isolate object" : "Generate sound";
+}
+
+els.toolsSubmodeBtns.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    toolsSubMode = btn.dataset.toolsmode;
+    applyToolsSubModeUI();
   });
 });
 
@@ -430,12 +512,28 @@ function applyModeUI() {
 
   els.genControls.classList.add("hidden");
   els.lipsyncControls.classList.add("hidden");
+  els.restyleControls.classList.add("hidden");
+  els.characterControls.classList.add("hidden");
+  els.inpaintControls.classList.add("hidden");
+  els.toolsControls.classList.add("hidden");
   els.kidsControls.classList.add("hidden");
-  els.lipsyncModelField.classList.toggle("hidden", mode === "image");
+  els.lipsyncModelField.classList.toggle("hidden", !(mode === "video" || mode === "lipsync" || mode === "kids"));
 
   if (mode === "lipsync") {
     els.lipsyncControls.classList.remove("hidden");
     els.generateBtn.textContent = "Sync";
+  } else if (mode === "restyle") {
+    els.restyleControls.classList.remove("hidden");
+    els.generateBtn.textContent = "Restyle";
+  } else if (mode === "character") {
+    els.characterControls.classList.remove("hidden");
+    els.generateBtn.textContent = "Generate character";
+  } else if (mode === "inpaint") {
+    els.inpaintControls.classList.remove("hidden");
+    els.generateBtn.textContent = "Apply edit";
+  } else if (mode === "tools") {
+    els.toolsControls.classList.remove("hidden");
+    applyToolsSubModeUI();
   } else if (mode === "kids") {
     els.kidsControls.classList.remove("hidden");
     els.generateBtn.textContent = "Generate";
@@ -508,10 +606,26 @@ function renderGallery() {
     const card = document.createElement("div");
     card.className = "card" + (item.status !== "succeeded" ? " " + (item.status === "failed" ? "failed" : "pending") : "");
 
+    // A blob: URL only stays valid for the page load that created it — if
+    // this item's url is a blob: URL that isn't in liveBlobUrls, it's a
+    // leftover from before the last refresh and will never load. Checking
+    // this up front avoids ever issuing the doomed request at all (no
+    // broken player, no console noise), rather than waiting for an error
+    // event and swapping the UI after the fact.
+    const isExpiredBlob = typeof item.url === "string" && item.url.startsWith("blob:") && !liveBlobUrls.has(item.url);
+
     const media = document.createElement("div");
     media.className = "card-media";
 
-    if (item.status === "succeeded" && item.url) {
+    if (item.status === "succeeded" && item.kind === "text") {
+      media.classList.add("audio"); // reuse the non-square, padded layout
+      const pre = document.createElement("pre");
+      pre.className = "transcript-text";
+      pre.textContent = item.textContent || "(empty transcript)";
+      media.appendChild(pre);
+    } else if (item.status === "succeeded" && isExpiredBlob) {
+      media.textContent = "Preview expired (stitched in your browser — this link doesn't survive a page refresh). Regenerate to get a fresh copy.";
+    } else if (item.status === "succeeded" && item.url) {
       if (item.kind === "video") {
         const video = document.createElement("video");
         video.src = item.url;
@@ -546,7 +660,7 @@ function renderGallery() {
     card.appendChild(media);
     card.appendChild(body);
 
-    if (item.status === "succeeded" && item.url && (item.kind === "image" || item.kind === "video" || item.kind === "audio")) {
+    if (item.status === "succeeded" && item.url && !isExpiredBlob && (item.kind === "image" || item.kind === "video" || item.kind === "audio")) {
       const actions = document.createElement("div");
       actions.className = "card-actions";
 
@@ -619,6 +733,19 @@ async function fileToResizedDataURL(file, maxDim = 1568) {
   canvas.height = height;
   canvas.getContext("2d").drawImage(img, 0, 0, width, height);
   return canvas.toDataURL("image/jpeg", 0.85);
+}
+
+// Reads up to 4 reference photos from a <input type="file" multiple> field
+// (matching Kling's elements limit — 1 main + up to 3 extra angle shots —
+// and kept the same for the multi-image edit model for consistency). Extra
+// files beyond 4 are silently dropped rather than erroring.
+async function readReferenceImages(fileInput) {
+  const files = Array.from(fileInput.files || []).slice(0, 4);
+  const urls = [];
+  for (const file of files) {
+    urls.push(await fileToResizedDataURL(file));
+  }
+  return urls;
 }
 
 function estimateDataUrlBytes(dataUrl) {
@@ -756,7 +883,7 @@ async function generateImageOrVideo() {
 
   let startImage = null;
   let endImage = null;
-  let referenceImage = null;
+  let referenceImages = [];
   if (mode === "video") {
     try {
       if (els.startImage.files[0]) startImage = await fileToResizedDataURL(els.startImage.files[0]);
@@ -768,11 +895,11 @@ async function generateImageOrVideo() {
   }
 
   const style = els.ugcStyle.checked ? "ugc" : "standard";
-  if (style === "ugc" && els.referenceImage.files[0]) {
+  if (style === "ugc" && els.referenceImage.files.length > 0) {
     try {
-      referenceImage = await fileToResizedDataURL(els.referenceImage.files[0]);
+      referenceImages = await readReferenceImages(els.referenceImage);
     } catch {
-      setStatus("Couldn't read the reference photo.", "error");
+      setStatus("Couldn't read the reference photo(s).", "error");
       return;
     }
   }
@@ -792,7 +919,7 @@ async function generateImageOrVideo() {
       startImage,
       endImage,
       style,
-      referenceImage,
+      referenceImages,
     }),
   });
   const data = await res.json();
@@ -978,6 +1105,481 @@ async function generateLipsync() {
   setStatus("Done.", "success");
 }
 
+async function generateRestyleVideo() {
+  const videoFile = els.restyleVideo.files[0];
+  const prompt = els.restylePrompt.value.trim();
+
+  if (!videoFile) {
+    setStatus("Choose a source video to restyle.", "error");
+    return;
+  }
+  if (!prompt) {
+    setStatus("Describe the new style you want.", "error");
+    return;
+  }
+
+  let videoUrl;
+  try {
+    setStatus("Uploading video…");
+    videoUrl = await uploadFileToFal(videoFile);
+  } catch (err) {
+    setStatus("Couldn't upload the video (" + (err.message || "unknown error") + ").", "error");
+    return;
+  }
+
+  setStatus("Sending request…");
+
+  const seedVal = els.restyleSeed.value.trim();
+  const res = await fetch("/api/restyle-video", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      video: videoUrl,
+      prompt,
+      task: els.restyleTask.value,
+      aspectRatio: els.restyleAspectRatio.value === "auto" ? undefined : els.restyleAspectRatio.value,
+      resolution: els.restyleResolution.value === "auto" ? undefined : els.restyleResolution.value,
+      negativePrompt: els.restyleNegativePrompt.value.trim() || undefined,
+      seed: seedVal ? Number(seedVal) : undefined,
+    }),
+  });
+  const data = await res.json();
+
+  if (!res.ok) {
+    setStatus(data.error || "Something went wrong.", "error");
+    return;
+  }
+
+  const placeholder = {
+    id: data.id,
+    prompt: prompt.slice(0, 120),
+    label: "Restyled video",
+    kind: "video",
+    status: data.status === "succeeded" ? "succeeded" : "processing",
+    url: data.status === "succeeded" ? (Array.isArray(data.output) ? data.output[0] : data.output) : null,
+  };
+  upsertHistoryItem(placeholder);
+
+  if (placeholder.status !== "succeeded") {
+    setStatus("Restyling — this can take several minutes for longer clips…");
+    await pollPrediction(data.id, (result) => upsertHistoryItem({ id: data.id, ...result }));
+  }
+  setStatus("Done.", "success");
+}
+
+async function generateCharacterConsistency() {
+  const faceFile = els.characterFaceImage.files[0];
+  const prompt = els.characterPrompt.value.trim();
+  if (!faceFile) {
+    setStatus("Choose a reference face photo.", "error");
+    return;
+  }
+  if (!prompt) {
+    setStatus("Describe the scene/pose for this character.", "error");
+    return;
+  }
+
+  let faceUrl;
+  try {
+    setStatus("Uploading photo…");
+    faceUrl = await uploadFileToFal(faceFile);
+  } catch (err) {
+    setStatus("Couldn't upload the photo (" + (err.message || "unknown error") + ").", "error");
+    return;
+  }
+
+  setStatus("Sending request…");
+  const seedVal = els.characterSeed.value.trim();
+  const res = await fetch("/api/face-consistency", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      faceImage: faceUrl,
+      prompt,
+      model: els.characterModel.value,
+      negativePrompt: els.characterNegativePrompt.value.trim() || undefined,
+      seed: seedVal ? Number(seedVal) : undefined,
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    setStatus(data.error || "Something went wrong.", "error");
+    return;
+  }
+
+  const placeholder = {
+    id: data.id,
+    prompt: prompt.slice(0, 120),
+    label: "Character (face-consistent)",
+    kind: "image",
+    status: data.status === "succeeded" ? "succeeded" : "processing",
+    url: data.status === "succeeded" ? (Array.isArray(data.output) ? data.output[0] : data.output) : null,
+  };
+  upsertHistoryItem(placeholder);
+  if (placeholder.status !== "succeeded") {
+    setStatus("Generating…");
+    await pollPrediction(data.id, (result) => upsertHistoryItem({ id: data.id, ...result }));
+  }
+  setStatus("Done — download it and use it as a Start frame in Video mode to animate this character.", "success");
+}
+
+// ---------- Inpaint (brush-based image editing) ----------
+
+let inpaintDrawing = false;
+
+function setupInpaintCanvas(imgUrl) {
+  const img = new Image();
+  img.onload = () => {
+    const maxW = 480;
+    const scale = Math.min(1, maxW / img.naturalWidth);
+    const w = Math.round(img.naturalWidth * scale);
+    const h = Math.round(img.naturalHeight * scale);
+    [els.inpaintImageCanvas, els.inpaintMaskCanvas].forEach((c) => {
+      c.width = w;
+      c.height = h;
+    });
+    const ictx = els.inpaintImageCanvas.getContext("2d");
+    ictx.clearRect(0, 0, w, h);
+    ictx.drawImage(img, 0, 0, w, h);
+    const mctx = els.inpaintMaskCanvas.getContext("2d");
+    mctx.clearRect(0, 0, w, h);
+    els.inpaintCanvasWrap.classList.remove("hidden");
+  };
+  img.src = imgUrl;
+}
+
+els.inpaintImage.addEventListener("change", () => {
+  const file = els.inpaintImage.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => setupInpaintCanvas(reader.result);
+  reader.readAsDataURL(file);
+});
+
+function inpaintCanvasPos(evt) {
+  const rect = els.inpaintMaskCanvas.getBoundingClientRect();
+  const scaleX = els.inpaintMaskCanvas.width / rect.width;
+  const scaleY = els.inpaintMaskCanvas.height / rect.height;
+  const point = evt.touches ? evt.touches[0] : evt;
+  return { x: (point.clientX - rect.left) * scaleX, y: (point.clientY - rect.top) * scaleY };
+}
+
+function inpaintPaintAt(x, y) {
+  const ctx = els.inpaintMaskCanvas.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath();
+  ctx.arc(x, y, Number(els.inpaintBrushSize.value) / 2, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+["mousedown", "touchstart"].forEach((evtName) => {
+  els.inpaintMaskCanvas.addEventListener(evtName, (e) => {
+    e.preventDefault();
+    inpaintDrawing = true;
+    const { x, y } = inpaintCanvasPos(e);
+    inpaintPaintAt(x, y);
+  });
+});
+["mousemove", "touchmove"].forEach((evtName) => {
+  els.inpaintMaskCanvas.addEventListener(evtName, (e) => {
+    if (!inpaintDrawing) return;
+    e.preventDefault();
+    const { x, y } = inpaintCanvasPos(e);
+    inpaintPaintAt(x, y);
+  });
+});
+["mouseup", "mouseleave", "touchend"].forEach((evtName) => {
+  els.inpaintMaskCanvas.addEventListener(evtName, () => {
+    inpaintDrawing = false;
+  });
+});
+
+els.inpaintClearBtn.addEventListener("click", () => {
+  const ctx = els.inpaintMaskCanvas.getContext("2d");
+  ctx.clearRect(0, 0, els.inpaintMaskCanvas.width, els.inpaintMaskCanvas.height);
+});
+
+async function generateInpaint() {
+  const imageFile = els.inpaintImage.files[0];
+  const prompt = els.inpaintPrompt.value.trim();
+  if (!imageFile) {
+    setStatus("Choose an image to edit.", "error");
+    return;
+  }
+  if (!prompt) {
+    setStatus("Describe what should appear in the painted area.", "error");
+    return;
+  }
+
+  // Composite the mask onto an opaque black background so it's a normal
+  // flat image file (not transparent) when uploaded — solid white marks the
+  // painted area, black is everything left alone.
+  const maskCanvas = document.createElement("canvas");
+  maskCanvas.width = els.inpaintMaskCanvas.width;
+  maskCanvas.height = els.inpaintMaskCanvas.height;
+  const mctx = maskCanvas.getContext("2d");
+  mctx.fillStyle = "#000000";
+  mctx.fillRect(0, 0, maskCanvas.width, maskCanvas.height);
+  mctx.drawImage(els.inpaintMaskCanvas, 0, 0);
+
+  let imageUrl, maskUrl;
+  try {
+    setStatus("Uploading image and mask…");
+    imageUrl = await uploadFileToFal(imageFile);
+    const maskBlob = await new Promise((resolve) => maskCanvas.toBlob(resolve, "image/png"));
+    maskUrl = await uploadFileToFal(new File([maskBlob], "mask.png", { type: "image/png" }));
+  } catch (err) {
+    setStatus("Couldn't upload the image/mask (" + (err.message || "unknown error") + ").", "error");
+    return;
+  }
+
+  setStatus("Sending request…");
+  const res = await fetch("/api/inpaint", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ image: imageUrl, mask: maskUrl, prompt }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    setStatus(data.error || "Something went wrong.", "error");
+    return;
+  }
+
+  const placeholder = {
+    id: data.id,
+    prompt: prompt.slice(0, 120),
+    label: "Inpainted image",
+    kind: "image",
+    status: data.status === "succeeded" ? "succeeded" : "processing",
+    url: data.status === "succeeded" ? (Array.isArray(data.output) ? data.output[0] : data.output) : null,
+  };
+  upsertHistoryItem(placeholder);
+  if (placeholder.status !== "succeeded") {
+    setStatus("Editing…");
+    await pollPrediction(data.id, (result) => upsertHistoryItem({ id: data.id, ...result }));
+  }
+  setStatus("Done.", "success");
+}
+
+// ---------- Tools: video->sound, instrumental music, transcription ----------
+
+async function generateAmbientAudio() {
+  const file = els.ambientVideo.files[0];
+  if (!file) {
+    setStatus("Choose a source video.", "error");
+    return;
+  }
+  let videoUrl;
+  try {
+    setStatus("Uploading video…");
+    videoUrl = await uploadFileToFal(file);
+  } catch (err) {
+    setStatus("Couldn't upload the video (" + (err.message || "unknown error") + ").", "error");
+    return;
+  }
+  setStatus("Sending request…");
+  const res = await fetch("/api/video-to-audio", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ video: videoUrl, prompt: els.ambientPrompt.value.trim() }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    setStatus(data.error || "Something went wrong.", "error");
+    return;
+  }
+  const placeholder = {
+    id: data.id,
+    label: "Video → sound",
+    kind: "audio",
+    status: data.status === "succeeded" ? "succeeded" : "processing",
+    url: data.status === "succeeded" ? (Array.isArray(data.output) ? data.output[0] : data.output) : null,
+  };
+  upsertHistoryItem(placeholder);
+  if (placeholder.status !== "succeeded") {
+    setStatus("Generating sound…");
+    await pollPrediction(data.id, (result) => upsertHistoryItem({ id: data.id, ...result }));
+  }
+  setStatus("Done.", "success");
+}
+
+async function generateMusic() {
+  const prompt = els.musicPrompt.value.trim();
+  if (!prompt) {
+    setStatus("Describe the mood/style of music you want.", "error");
+    return;
+  }
+  setStatus("Sending request…");
+  const res = await fetch("/api/generate-music", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt, durationSeconds: Number(els.musicDuration.value) || 30 }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    setStatus(data.error || "Something went wrong.", "error");
+    return;
+  }
+  const placeholder = {
+    id: data.id,
+    prompt: prompt.slice(0, 120),
+    label: "Instrumental music",
+    kind: "audio",
+    status: data.status === "succeeded" ? "succeeded" : "processing",
+    url: data.status === "succeeded" ? (Array.isArray(data.output) ? data.output[0] : data.output) : null,
+  };
+  upsertHistoryItem(placeholder);
+  if (placeholder.status !== "succeeded") {
+    setStatus("Composing…");
+    await pollPrediction(data.id, (result) => upsertHistoryItem({ id: data.id, ...result }));
+  }
+  setStatus("Done.", "success");
+}
+
+async function generateTranscribe() {
+  const file = els.transcribeFile.files[0];
+  if (!file) {
+    setStatus("Choose an audio or video file.", "error");
+    return;
+  }
+  let fileUrl;
+  try {
+    setStatus("Uploading file…");
+    fileUrl = await uploadFileToFal(file);
+  } catch (err) {
+    setStatus("Couldn't upload the file (" + (err.message || "unknown error") + ").", "error");
+    return;
+  }
+  setStatus("Transcribing…");
+  const res = await fetch("/api/transcribe", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ audio: fileUrl, diarize: els.transcribeDiarize.checked }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    setStatus(data.error || "Something went wrong.", "error");
+    return;
+  }
+
+  const renderTranscript = (rawOutput) => {
+    let text = rawOutput;
+    try {
+      const parsed = JSON.parse(rawOutput);
+      text = parsed.text || rawOutput;
+    } catch {
+      // rawOutput wasn't JSON (shouldn't normally happen) — show as-is.
+    }
+    upsertHistoryItem({
+      id: data.id,
+      label: "Transcript",
+      kind: "text",
+      status: "succeeded",
+      url: null,
+      textContent: text,
+    });
+  };
+
+  if (data.status === "succeeded" && data.output) {
+    renderTranscript(Array.isArray(data.output) ? data.output[0] : data.output);
+  } else {
+    upsertHistoryItem({ id: data.id, label: "Transcript", kind: "text", status: "processing", url: null });
+    await pollPrediction(data.id, (result) => {
+      if (result.status === "succeeded" && result.url) renderTranscript(result.url);
+      else upsertHistoryItem({ id: data.id, label: "Transcript", kind: "text", ...result });
+    });
+  }
+  setStatus("Done.", "success");
+}
+
+els.segmentVideo.addEventListener("change", () => {
+  const file = els.segmentVideo.files[0];
+  if (!file) return;
+  segmentPoint = null;
+  els.segmentPointHint.textContent = "";
+
+  // Grabs the very first frame client-side by seeking a hidden <video>
+  // element to just after 0 and drawing that frame to a canvas — avoids
+  // needing a server-side frame-extraction step just to show the user
+  // something clickable.
+  const video = document.createElement("video");
+  video.muted = true;
+  video.src = URL.createObjectURL(file);
+  video.addEventListener("loadeddata", () => {
+    video.currentTime = 0.01;
+  });
+  video.addEventListener("seeked", () => {
+    const maxW = 480;
+    const scale = Math.min(1, maxW / video.videoWidth);
+    els.segmentCanvas.width = Math.round(video.videoWidth * scale);
+    els.segmentCanvas.height = Math.round(video.videoHeight * scale);
+    const ctx = els.segmentCanvas.getContext("2d");
+    ctx.drawImage(video, 0, 0, els.segmentCanvas.width, els.segmentCanvas.height);
+    els.segmentCanvasWrap.classList.remove("hidden");
+    URL.revokeObjectURL(video.src);
+  });
+});
+
+els.segmentCanvas.addEventListener("click", (e) => {
+  const rect = els.segmentCanvas.getBoundingClientRect();
+  const scaleX = els.segmentCanvas.width / rect.width;
+  const scaleY = els.segmentCanvas.height / rect.height;
+  segmentPoint = { x: Math.round((e.clientX - rect.left) * scaleX), y: Math.round((e.clientY - rect.top) * scaleY) };
+
+  const ctx = els.segmentCanvas.getContext("2d");
+  // Redraw isn't possible without the original frame retained — instead
+  // just drop a marker dot at the click point directly onto the canvas.
+  ctx.fillStyle = "#ff3b6b";
+  ctx.beginPath();
+  ctx.arc(segmentPoint.x, segmentPoint.y, 6, 0, Math.PI * 2);
+  ctx.fill();
+  els.segmentPointHint.textContent = `Point marked at (${segmentPoint.x}, ${segmentPoint.y}). Click again to move it.`;
+});
+
+async function generateSegment() {
+  const file = els.segmentVideo.files[0];
+  if (!file) {
+    setStatus("Choose a source video.", "error");
+    return;
+  }
+  if (!segmentPoint) {
+    setStatus("Click the object you want to isolate on the frame preview.", "error");
+    return;
+  }
+  let videoUrl;
+  try {
+    setStatus("Uploading video…");
+    videoUrl = await uploadFileToFal(file);
+  } catch (err) {
+    setStatus("Couldn't upload the video (" + (err.message || "unknown error") + ").", "error");
+    return;
+  }
+  setStatus("Sending request…");
+  const res = await fetch("/api/segment-video", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ video: videoUrl, x: segmentPoint.x, y: segmentPoint.y }),
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    setStatus(data.error || "Something went wrong.", "error");
+    return;
+  }
+  const placeholder = {
+    id: data.id,
+    label: "Isolated object",
+    kind: "video",
+    status: data.status === "succeeded" ? "succeeded" : "processing",
+    url: data.status === "succeeded" ? (Array.isArray(data.output) ? data.output[0] : data.output) : null,
+  };
+  upsertHistoryItem(placeholder);
+  if (placeholder.status !== "succeeded") {
+    setStatus("Tracking the object across the video…");
+    await pollPrediction(data.id, (result) => upsertHistoryItem({ id: data.id, ...result }));
+  }
+  setStatus("Done.", "success");
+}
+
 // ---------- Storyboard (30s-2min videos made of stitched scene clips) ----------
 
 function pollPredictionPromise(id) {
@@ -1020,7 +1622,7 @@ async function generateOneSceneClip(sceneText, opts) {
         aspectRatio: opts.aspectRatio,
         cameraMotion: "none",
         style: opts.style,
-        referenceImage: opts.referenceImage,
+        referenceImages: opts.referenceImages,
       }),
     });
     const data = await res.json();
@@ -1356,7 +1958,7 @@ async function stitchAudioClips(urls, onProgress) {
   await ffmpeg.exec([...inputArgs, "-filter_complex", filter, "-map", "[a]", "output.mp3"]);
 
   const data = await ffmpeg.readFile("output.mp3");
-  return URL.createObjectURL(new Blob([data.buffer], { type: "audio/mpeg" }));
+  return makeSessionBlobUrl(new Blob([data.buffer], { type: "audio/mpeg" }));
 }
 
 async function stitchVideoClips(urls, onProgress, opts = {}) {
@@ -1397,7 +1999,7 @@ async function stitchVideoClips(urls, onProgress, opts = {}) {
   }
 
   const data = await ffmpeg.readFile("output.mp4");
-  return URL.createObjectURL(new Blob([data.buffer], { type: "video/mp4" }));
+  return makeSessionBlobUrl(new Blob([data.buffer], { type: "video/mp4" }));
 }
 
 async function generateStoryboard() {
@@ -1412,12 +2014,12 @@ async function generateStoryboard() {
   const totalSeconds = Number(els.videoLength.value);
   const style = els.ugcStyle.checked ? "ugc" : "standard";
 
-  let referenceImage = null;
-  if (style === "ugc" && els.referenceImage.files[0]) {
+  let referenceImages = [];
+  if (style === "ugc" && els.referenceImage.files.length > 0) {
     try {
-      referenceImage = await fileToResizedDataURL(els.referenceImage.files[0]);
+      referenceImages = await readReferenceImages(els.referenceImage);
     } catch {
-      setStatus("Couldn't read the reference photo.", "error");
+      setStatus("Couldn't read the reference photo(s).", "error");
       return;
     }
   }
@@ -1444,7 +2046,7 @@ async function generateStoryboard() {
     statuses[i] = "working";
     renderStoryboardProgress(scenes, statuses);
     try {
-      const url = await generateOneSceneClip(sceneText, { modelId, aspectRatio, style, referenceImage });
+      const url = await generateOneSceneClip(sceneText, { modelId, aspectRatio, style, referenceImages });
       statuses[i] = "done";
       renderStoryboardProgress(scenes, statuses);
       return url;
@@ -2221,7 +2823,7 @@ async function mixSfxAndStitch(sceneUrls, sfxAudioUrls, onProgress, opts = {}) {
   if (finalNames.length === 1) {
     stitchLog("mixSfxAndStitch: single scene, skipping concat");
     const data = await ffmpeg.readFile(finalNames[0]);
-    return URL.createObjectURL(new Blob([data.buffer], { type: "video/mp4" }));
+    return makeSessionBlobUrl(new Blob([data.buffer], { type: "video/mp4" }));
   }
 
   stitchLog(`mixSfxAndStitch: concatenating ${finalNames.length} normalized scene(s)`);
@@ -2240,7 +2842,7 @@ async function mixSfxAndStitch(sceneUrls, sfxAudioUrls, onProgress, opts = {}) {
 
   const data = await ffmpeg.readFile("output.mp4");
   stitchLog(`mixSfxAndStitch: done, output ${data.byteLength} bytes`);
-  return URL.createObjectURL(new Blob([data.buffer], { type: "video/mp4" }));
+  return makeSessionBlobUrl(new Blob([data.buffer], { type: "video/mp4" }));
 }
 
 const NARRATION_SCENE_VARIATIONS = [
@@ -3265,6 +3867,13 @@ els.generateBtn.addEventListener("click", async () => {
   els.generateBtn.disabled = true;
   try {
     if (mode === "lipsync") await generateLipsync();
+    else if (mode === "restyle") await generateRestyleVideo();
+    else if (mode === "character") await generateCharacterConsistency();
+    else if (mode === "inpaint") await generateInpaint();
+    else if (mode === "tools" && toolsSubMode === "music") await generateMusic();
+    else if (mode === "tools" && toolsSubMode === "transcribe") await generateTranscribe();
+    else if (mode === "tools" && toolsSubMode === "segment") await generateSegment();
+    else if (mode === "tools") await generateAmbientAudio();
     else if (mode === "kids" && kidsSubMode === "song") await generateKidsSong();
     else if (mode === "kids" && kidsSubMode === "cartoon" && cartoonContentType === "narration") await generateCartoonNarrationVideo();
     else if (mode === "kids" && kidsSubMode === "cartoon" && cartoonContentType === "dialogue") await generateCartoonDialogueVideo();
