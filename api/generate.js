@@ -101,6 +101,24 @@ module.exports = async function handler(req, res) {
 
   const input = usingEditModel ? { prompt: finalPrompt } : { ...model.defaults, prompt: finalPrompt };
 
+  // The flux-pro/kontext family (both the single-image and /multi variants
+  // used for a styled request with reference photo(s)) defaults to
+  // safety_tolerance: 2 on fal's own 1(strictest)-6(most permissive) scale
+  // when the field is left unset — confirmed live via fal's docs. That's
+  // strict enough to have caused a real, confirmed failure: a UGC-style
+  // request editing in two reference photos (a location shot + a photo of a
+  // person) came back "succeeded" with a completely solid black image —
+  // fal's safety layer silently swapping in a blank placeholder instead of
+  // erroring, rather than any bug in this app's request-building. This sets
+  // the field to 5 (permissive, but one notch below the top tier — fal's
+  // own docs don't fully explain what unlocks tier 6, so this stays off it)
+  // whenever the edit model's schema exposes the field at all, rather than
+  // silently inheriting whatever fal's default happens to be.
+  if (usingEditModel) {
+    const safetyField = firstSupportedField(schema, ["safety_tolerance"]);
+    if (safetyField) input[safetyField] = 5;
+  }
+
   // Aspect ratio — some models take a plain aspect_ratio string, others a
   // named image_size preset (e.g. "square_hd", "landscape_16_9").
   if (aspectRatio) {
