@@ -75,10 +75,17 @@ module.exports = async function handler(req, res) {
   // just an extra field on the same one (fal-ai/flux-pro/kontext takes a
   // single image_url; its /multi sibling takes an image_urls array) — see
   // _models.js's comment on UGC_IMAGE_EDIT_MULTI_MODEL.
+  // A model that ships its own editing endpoint uses that one, so picking a
+  // model in the dropdown actually means something even when reference photos
+  // are attached. Only models without one fall back to the flux/kontext pair
+  // below. This matters beyond tidiness: BFL's moderation layer on the
+  // kontext models hard-blocks photorealistic prompts describing a real
+  // person and silently returns a solid black image, so always rerouting to
+  // kontext made those requests fail no matter which model was selected.
   let effectiveModel = model.falModel;
   let usingEditModel = false;
   if (hasStyle && model.kind === "image" && refImages.length > 0) {
-    effectiveModel = refImages.length > 1 ? UGC_IMAGE_EDIT_MULTI_MODEL : UGC_IMAGE_EDIT_MODEL;
+    effectiveModel = model.falModelEdit || (refImages.length > 1 ? UGC_IMAGE_EDIT_MULTI_MODEL : UGC_IMAGE_EDIT_MODEL);
     usingEditModel = true;
   }
 
@@ -101,19 +108,20 @@ module.exports = async function handler(req, res) {
 
   const input = usingEditModel ? { prompt: finalPrompt } : { ...model.defaults, prompt: finalPrompt };
 
-  // The flux-pro/kontext family (both the single-image and /multi variants
-  // used for a styled request with reference photo(s)) defaults to
-  // safety_tolerance: 2 on fal's own 1(strictest)-6(most permissive) scale
-  // when the field is left unset — confirmed live via fal's docs. That's
-  // strict enough to have caused a real, confirmed failure: a UGC-style
-  // request editing in two reference photos (a location shot + a photo of a
-  // person) came back "succeeded" with a completely solid black image —
-  // fal's safety layer silently swapping in a blank placeholder instead of
-  // erroring, rather than any bug in this app's request-building. This sets
-  // the field to 5 (permissive, but one notch below the top tier — fal's
-  // own docs don't fully explain what unlocks tier 6, so this stays off it)
-  // whenever the edit model's schema exposes the field at all, rather than
-  // silently inheriting whatever fal's default happens to be.
+  // The flux-pro/kontext family defaults to safety_tolerance: 2 on fal's
+  // 1(strictest)-5(most permissive) scale when the field is left unset, so
+  // this raises it to the top of that documented range whenever the chosen
+  // edit endpoint exposes the field at all (Seedream's, for one, doesn't —
+  // hence the schema check rather than setting it unconditionally).
+  //
+  // Worth being clear about what this does and doesn't buy: it was tried
+  // first as the fix for a UGC-style request that came back "succeeded" with
+  // a solid black image, and it did NOT resolve it. BFL runs a separate,
+  // non-bypassable moderation pass on photorealistic prompts describing a
+  // real person, and safety_tolerance has no effect on that one. The actual
+  // fix for that case is the edit-endpoint routing above (staying on the
+  // user's selected model, off BFL entirely); this stays because a more
+  // permissive setting is still the right default for the kontext path.
   if (usingEditModel) {
     const safetyField = firstSupportedField(schema, ["safety_tolerance"]);
     if (safetyField) input[safetyField] = 5;
@@ -162,9 +170,14 @@ module.exports = async function handler(req, res) {
   // `frontal_image_url`.
   if (refImages.length > 0) {
     if (usingEditModel) {
-      if (effectiveModel === UGC_IMAGE_EDIT_MULTI_MODEL) {
-        const field = firstSupportedField(schema, ["image_urls"]) || "image_urls";
-        input[field] = refImages;
+      // Which shape the photos go in is decided by the endpoint's own schema
+      // rather than by which endpoint it is — some edit models take an
+      // image_urls array even for a single photo (Seedream v4), others take a
+      // single image_url (flux-pro/kontext). Asking the schema keeps this
+      // working as more edit endpoints get added to the registry.
+      const arrayField = firstSupportedField(schema, ["image_urls"]);
+      if (arrayField) {
+        input[arrayField] = refImages;
       } else {
         const field = firstSupportedField(schema, ["image_url", "input_image", "image"]) || "image_url";
         input[field] = refImages[0];
