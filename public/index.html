@@ -49,6 +49,7 @@
               <option value="1:1">Square (1:1)</option>
               <option value="16:9" selected>Landscape (16:9)</option>
               <option value="9:16">Portrait (9:16)</option>
+              <option value="4:5">Portrait (4:5 — Instagram feed)</option>
             </select>
           </label>
 
@@ -203,6 +204,11 @@
               <option value="9:16">Portrait (9:16)</option>
               <option value="1:1">Square (1:1)</option>
             </select>
+            <!-- 4:5 intentionally left out here: wan-vace-14b's aspect_ratio
+                 is a fixed enum (confirmed via fal's docs) of just
+                 auto/16:9/1:1/9:16 — sending 4:5 would just get rejected by
+                 fal, unlike the main Image/Video aspect_ratio field below,
+                 which most models accept as a free-form ratio string. -->
           </label>
           <details class="advanced">
             <summary>Advanced</summary>
