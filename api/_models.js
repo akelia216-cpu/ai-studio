@@ -69,6 +69,22 @@ const MODELS = {
     },
   },
 
+  // Added 2026-08 — Bytedance's newer image generator (feature-audit doc
+  // item 2). Schema-verified via fal's openapi endpoint the same way as
+  // every other entry here; not yet live-tested (fal balance was at zero).
+  "seedream-v4": {
+    label: "Bytedance Seedream v4 (newer)",
+    kind: "image",
+    falModel: "fal-ai/bytedance/seedream/v4/text-to-image",
+    defaults: {},
+    candidates: {
+      aspectRatio: ["aspect_ratio"],
+      imageSize: ["image_size"],
+      seed: ["seed"],
+      negativePrompt: ["negative_prompt"],
+    },
+  },
+
   // ---- Video ----
   "minimax-video-01": {
     label: "Minimax Video-01",
@@ -184,6 +200,11 @@ const MODELS = {
       seed: ["seed"],
     },
     supportsCameraObject: false,
+    // Added 2026-08 — now wired up (see generate.js). "elements" is
+    // image-to-video ONLY per fal's own docs (confirmed live), so this only
+    // takes effect when startImage is also supplied and the request routes
+    // to falModelImageToVideo above.
+    supportsElements: true,
   },
   "kling-v3-pro": {
     label: "Kling v3 Pro (newest, higher quality)",
@@ -194,6 +215,92 @@ const MODELS = {
     candidates: {
       startImage: ["start_image_url", "image_url", "start_image", "first_frame_image", "image"],
       endImage: ["end_image_url", "tail_image_url", "end_image", "tail_image", "last_frame_image"],
+      seed: ["seed"],
+    },
+    supportsCameraObject: false,
+    supportsElements: true,
+  },
+  // ---- Added 2026-08: additional flagship engines from the feature-audit
+  // doc (item 2 — "more/newer video models"). Confirmed live via fal's
+  // openapi schema endpoint the same way as every entry above. These are
+  // pricier/slower than the existing defaults, so they're opt-in choices in
+  // the model dropdown, not replacements. Schema-verified only, not yet
+  // live-tested (fal balance was at zero at the time these were added).
+  "seedance-v1-pro": {
+    label: "Bytedance Seedance v1 Pro (opt-in, higher quality)",
+    kind: "video",
+    falModel: "fal-ai/bytedance/seedance/v1/pro/text-to-video",
+    falModelImageToVideo: "fal-ai/bytedance/seedance/v1/pro/image-to-video",
+    defaults: {},
+    candidates: {
+      aspectRatio: ["aspect_ratio"],
+      startImage: ["image_url", "start_image_url", "start_image", "image"],
+      seed: ["seed"],
+    },
+    supportsCameraObject: false,
+  },
+  "kling-v2.1-master": {
+    label: "Kling v2.1 Master",
+    kind: "video",
+    falModel: "fal-ai/kling-video/v2.1/master/text-to-video",
+    falModelImageToVideo: "fal-ai/kling-video/v2.1/master/image-to-video",
+    defaults: { duration: "5" },
+    candidates: {
+      startImage: ["start_image_url", "image_url", "start_image", "first_frame_image", "image"],
+      endImage: ["end_image_url", "tail_image_url", "end_image", "tail_image", "last_frame_image"],
+      seed: ["seed"],
+    },
+    supportsCameraObject: false,
+  },
+  "wan-25-preview": {
+    label: "Wan 2.5 Preview (image-to-video)",
+    kind: "video",
+    // Image-to-video only per fal's own listing — no text-to-video variant
+    // confirmed, so falModel and falModelImageToVideo are the same endpoint
+    // and generate.js's startImage requirement effectively gates this one.
+    falModel: "fal-ai/wan-25-preview/image-to-video",
+    falModelImageToVideo: "fal-ai/wan-25-preview/image-to-video",
+    defaults: {},
+    candidates: {
+      startImage: ["image_url", "start_image_url", "start_image", "image"],
+      seed: ["seed"],
+    },
+    supportsCameraObject: false,
+  },
+  "veo3": {
+    label: "Google Veo 3 (premium, opt-in)",
+    kind: "video",
+    falModel: "fal-ai/veo3",
+    falModelImageToVideo: "fal-ai/veo3",
+    defaults: {},
+    candidates: {
+      aspectRatio: ["aspect_ratio"],
+      startImage: ["image_url"],
+      seed: ["seed"],
+    },
+    supportsCameraObject: false,
+  },
+  "veo3-fast": {
+    label: "Google Veo 3 Fast (premium, cheaper/faster)",
+    kind: "video",
+    falModel: "fal-ai/veo3/fast",
+    falModelImageToVideo: "fal-ai/veo3/fast",
+    defaults: {},
+    candidates: {
+      aspectRatio: ["aspect_ratio"],
+      startImage: ["image_url"],
+      seed: ["seed"],
+    },
+    supportsCameraObject: false,
+  },
+  "sora-2": {
+    label: "OpenAI Sora 2 (premium, opt-in)",
+    kind: "video",
+    falModel: "fal-ai/sora-2/text-to-video",
+    falModelImageToVideo: "fal-ai/sora-2/text-to-video",
+    defaults: {},
+    candidates: {
+      aspectRatio: ["aspect_ratio"],
       seed: ["seed"],
     },
     supportsCameraObject: false,
@@ -225,9 +332,19 @@ const ASPECT_TO_IMAGE_SIZE = {
 
 // Model used to edit/compose an existing image (e.g. a product photo, or a
 // cartoon character's reference image) into a new scene, keeping its
-// subject recognizable — used whenever a styled request supplies a
+// subject recognizable — used whenever a styled request supplies a single
 // reference photo.
 const UGC_IMAGE_EDIT_MODEL = "fal-ai/flux-pro/kontext";
+
+// Added 2026-08 — multi-reference-image sibling of the above, used instead
+// whenever more than one reference photo is supplied (e.g. a character from
+// two angles, or a product plus a person). Schema confirmed live via fal's
+// own docs: same "prompt" field, but the image input is a plain array field
+// "image_urls" instead of kontext's single "image_url" — genuinely a
+// different field name, not just another candidate for the same one, so
+// generate.js branches on reference count rather than treating this as a
+// candidate fallback.
+const UGC_IMAGE_EDIT_MULTI_MODEL = "fal-ai/flux-pro/kontext/multi";
 
 // Appended to the user's prompt for each named style, to push the output
 // toward that look rather than a generic AI-generated one.
@@ -284,6 +401,7 @@ module.exports = {
   CAMERA_PRESETS,
   ACTION_PRESETS,
   UGC_IMAGE_EDIT_MODEL,
+  UGC_IMAGE_EDIT_MULTI_MODEL,
   UGC_STYLE_CLAUSES,
   ASPECT_TO_IMAGE_SIZE,
 };
