@@ -149,7 +149,7 @@
           <div id="referenceImageField" class="field">
             <span>Reference photo(s) — product or person (optional, up to 4)</span>
             <input type="file" id="referenceImage" accept="image/*" multiple />
-            <span class="hint">For images, one photo gets edited into the new scene; two or more use a multi-image editing model that blends all of them in (e.g. a person + a product, or a character from two angles). For video, the first photo is used as a character/subject reference if the model supports one — on Kling v3 Standard/Pro with an Image → Video start frame, extra photos become additional angle shots for Kling's stronger "elements" identity binding.</span>
+            <span class="hint">For images, your photos get edited into the new scene (e.g. a person + a product, or a character from two angles). Models with their own editing endpoint — Seedream v4 — handle this themselves; the rest switch to Flux Kontext, whose content filter is much stricter about photorealistic prompts describing a real person, so pick Seedream v4 if those get blocked. For video, the first photo is used as a character/subject reference if the model supports one — on Kling v3 Standard/Pro with an Image → Video start frame, extra photos become additional angle shots for Kling's stronger "elements" identity binding.</span>
           </div>
 
           <details class="advanced">
