@@ -76,6 +76,16 @@ const MODELS = {
     label: "Bytedance Seedream v4 (newer)",
     kind: "image",
     falModel: "fal-ai/bytedance/seedream/v4/text-to-image",
+    // Seedream ships its own image-editing endpoint, so a styled request with
+    // reference photo(s) stays on the model the user actually picked instead
+    // of being silently rerouted to flux-pro/kontext (see generate.js). That
+    // reroute was a real problem, not just a cosmetic one: BFL's moderation
+    // layer on the kontext models blocks photorealistic real-person prompts
+    // outright and returns a solid black image, which no safety_tolerance
+    // value gets around. Seedream's edit endpoint takes the same image_urls
+    // array (up to 10 photos) and handles one or many, so a single entry
+    // covers both the single- and multi-reference cases.
+    falModelEdit: "fal-ai/bytedance/seedream/v4/edit",
     defaults: {},
     candidates: {
       aspectRatio: ["aspect_ratio"],
