@@ -128,6 +128,20 @@ module.exports = async function handler(req, res) {
   if (usingEditModel) {
     const safetyField = firstSupportedField(schema, ["safety_tolerance"]);
     if (safetyField) input[safetyField] = 5;
+
+    // Separate from the above: several fal-hosted models (Seedream's edit
+    // endpoint among them) run fal's own post-generation safety checker on
+    // top of whatever the model does, and it's the one that reports a block
+    // via has_nsfw_concepts. It's a documented, schema-declared field, and
+    // fal gates actually honouring it on account-level authorization — so
+    // requesting it here is a request, not an override, and accounts without
+    // that authorization keep the checker on regardless.
+    const checkerField = firstSupportedField(schema, ["enable_safety_checker"]);
+    if (checkerField) input[checkerField] = false;
+
+    // Which endpoint really ran, so the UI can stop implying the dropdown
+    // choice was used verbatim when a reference photo rerouted it.
+    appliedFeatures.editModelUsed = effectiveModel;
   }
 
   // Aspect ratio — some models take a plain aspect_ratio string, others a
