@@ -3,7 +3,7 @@
 // the latest file actually made it to production — that mismatch has been
 // the root cause of more than one "the fix didn't work" report in this
 // project's history.
-const APP_BUILD = "2026-08-01-remove-gemini-1";
+const APP_BUILD = "2026-08-23-safety-tolerance-fix-1";
 console.log(`[AI Studio] app.js build ${APP_BUILD} loaded`);
 
 // Timestamped console breadcrumb for the sound-effect/stitch pipeline
@@ -593,6 +593,43 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+// fal's content-safety layer sometimes returns a "succeeded" prediction that
+// is actually a blank placeholder image (a confirmed real case: a solid
+// black PNG) instead of an explicit error. This can't be fully prevented
+// server-side (see the safety_tolerance fix in api/generate.js), so as a
+// safety net, sample the loaded image's pixels and flag it in the gallery
+// when it looks suspiciously like a single flat color. Wrapped in try/catch
+// because reading pixel data can throw if the image's host doesn't allow
+// cross-origin pixel access (a CORS-taint error) — in that case this just
+// silently does nothing rather than breaking the gallery.
+function flagIfLikelySafetyBlock(img, mediaEl) {
+  try {
+    const canvas = document.createElement("canvas");
+    const sampleSize = 32; // downscale for a cheap, fast sample
+    canvas.width = sampleSize;
+    canvas.height = sampleSize;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(img, 0, 0, sampleSize, sampleSize);
+    const { data } = ctx.getImageData(0, 0, sampleSize, sampleSize);
+
+    let maxDiff = 0;
+    const r0 = data[0], g0 = data[1], b0 = data[2];
+    for (let i = 0; i < data.length; i += 4) {
+      maxDiff = Math.max(maxDiff, Math.abs(data[i] - r0), Math.abs(data[i + 1] - g0), Math.abs(data[i + 2] - b0));
+      if (maxDiff > 6) return; // clearly has real variation — not a flat placeholder
+    }
+
+    // Every sampled pixel is within a few shades of the first one — almost
+    // certainly a flat placeholder image, not a real generation.
+    const warning = document.createElement("div");
+    warning.className = "safety-block-warning";
+    warning.textContent = `⚠️ This came back as a solid flat color (${r0},${g0},${b0}) — likely fal's safety filter blocked the generation and returned a placeholder instead of your image. Try adjusting the prompt or reference photos and regenerating.`;
+    mediaEl.appendChild(warning);
+  } catch {
+    // CORS-taint or other read failure — no-op.
+  }
+}
+
 function renderGallery() {
   const items = loadHistory();
   els.gallery.innerHTML = "";
@@ -642,6 +679,8 @@ function renderGallery() {
         const img = document.createElement("img");
         img.src = item.url;
         img.alt = item.prompt || "";
+        img.crossOrigin = "anonymous"; // needed to read pixel data below without a canvas taint error
+        img.addEventListener("load", () => flagIfLikelySafetyBlock(img, media));
         media.appendChild(img);
       }
     } else if (item.status === "failed") {
