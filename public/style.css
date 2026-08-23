@@ -324,6 +324,19 @@ input[type="file"] {
 .card-media.audio { aspect-ratio: auto; padding: 20px 12px; }
 .card-media.audio audio { width: 100%; }
 
+.safety-block-warning {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.4;
+  background: rgba(120, 20, 20, 0.85);
+  color: #fff;
+}
+.card-media { position: relative; }
+
 #cartoonCharacterPreview {
   margin: -8px 0 16px;
 }
