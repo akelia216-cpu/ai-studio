@@ -1,5 +1,10 @@
-const { MODELS, CAMERA_PRESETS, ACTION_PRESETS, UGC_IMAGE_EDIT_MODEL, UGC_STYLE_CLAUSES, ASPECT_TO_IMAGE_SIZE } = require("./_models");
+const { MODELS, CAMERA_PRESETS, ACTION_PRESETS, UGC_IMAGE_EDIT_MODEL, UGC_IMAGE_EDIT_MULTI_MODEL, UGC_STYLE_CLAUSES, ASPECT_TO_IMAGE_SIZE } = require("./_models");
 const { getInputSchema, firstSupportedField, createPrediction } = require("./_fal");
+
+// (Brush-based inpainting used to be folded into this file as an "action:
+// inpaint" branch to save a serverless-function slot on Vercel's Hobby
+// plan; now split back out into api/inpaint.js since the project's Vercel
+// plan was upgraded and that constraint no longer applies.)
 
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") {
@@ -38,8 +43,16 @@ module.exports = async function handler(req, res) {
     endImage, // data: URI or URL, video only
     style, // "standard" | "ugc" | "cartoon"
     styleOverride, // optional custom style clause — replaces the built-in "cartoon" style text when given
-    referenceImage, // data: URI or URL — product/character photo for a styled request
+    referenceImages, // array of data: URIs/URLs — product/character reference photos for a styled request (up to 4)
+    referenceImage, // legacy singular form, still accepted — treated as a one-item referenceImages array
   } = body;
+
+  // Support both the current plural field and the older singular one so
+  // nothing calling this with the old shape breaks. Callers can supply
+  // multiple reference photos now (e.g. a character from two angles, or a
+  // product plus a person) — see refImages usage below for what each
+  // destination model does with more than one.
+  const refImages = (Array.isArray(referenceImages) ? referenceImages : referenceImage ? [referenceImage] : []).filter(Boolean).slice(0, 4);
 
   if (!prompt || !prompt.trim()) {
     res.status(400).json({ error: "Prompt is required." });
@@ -55,13 +68,17 @@ module.exports = async function handler(req, res) {
   const hasStyle = style === "ugc" || style === "cartoon";
   const appliedFeatures = {};
 
-  // For a styled image with a reference/product/character photo, switch to
-  // an image-editing model that can keep that photo's subject recognizable
-  // instead of the plain text-to-image model the user picked.
+  // For a styled image with one or more reference/product/character photos,
+  // switch to an image-editing model that can keep those photos' subject(s)
+  // recognizable instead of the plain text-to-image model the user picked.
+  // More than one reference photo needs a genuinely different endpoint, not
+  // just an extra field on the same one (fal-ai/flux-pro/kontext takes a
+  // single image_url; its /multi sibling takes an image_urls array) — see
+  // _models.js's comment on UGC_IMAGE_EDIT_MULTI_MODEL.
   let effectiveModel = model.falModel;
   let usingEditModel = false;
-  if (hasStyle && model.kind === "image" && referenceImage) {
-    effectiveModel = UGC_IMAGE_EDIT_MODEL;
+  if (hasStyle && model.kind === "image" && refImages.length > 0) {
+    effectiveModel = refImages.length > 1 ? UGC_IMAGE_EDIT_MULTI_MODEL : UGC_IMAGE_EDIT_MODEL;
     usingEditModel = true;
   }
 
@@ -108,18 +125,51 @@ module.exports = async function handler(req, res) {
     if (field) input[field] = negativePrompt.trim();
   }
 
-  // Reference/product photo — for the image-edit model this IS the image
-  // being edited; for video models it maps to a subject-reference style
-  // field if the chosen model supports one.
-  if (referenceImage) {
+  // Reference/product photo(s) — for the image-edit model these ARE the
+  // image(s) being edited; for video models the first one maps to a
+  // subject-reference/identity field if the chosen model supports one.
+  //
+  // Kling v3's `elements` identity-binding gets first shot at it (feature-
+  // audit doc item 11): it's a stronger identity-lock mechanism than the
+  // plain subject_reference field other models fall back to below, and it's
+  // image-to-video only (confirmed live via fal's docs), so it only applies
+  // once effectiveModel has already switched to falModelImageToVideo (i.e.
+  // startImage was also supplied). The model itself decides whether to
+  // actually inject the identity based on the prompt referencing
+  // "@Element1" — fal's docs confirm that's how the binding is invoked — so
+  // this appends that reference to the prompt when the user hasn't already
+  // written it in themselves. Elements is the one destination that actually
+  // uses more than the first reference photo: fal's docs confirm up to 3
+  // extra angle shots go in `reference_image_urls` alongside the main
+  // `frontal_image_url`.
+  if (refImages.length > 0) {
     if (usingEditModel) {
-      const field = firstSupportedField(schema, ["image_url", "input_image", "image"]) || "image_url";
-      input[field] = referenceImage;
+      if (effectiveModel === UGC_IMAGE_EDIT_MULTI_MODEL) {
+        const field = firstSupportedField(schema, ["image_urls"]) || "image_urls";
+        input[field] = refImages;
+      } else {
+        const field = firstSupportedField(schema, ["image_url", "input_image", "image"]) || "image_url";
+        input[field] = refImages[0];
+      }
       appliedFeatures.referenceImage = true;
+    } else if (model.kind === "video" && model.supportsElements && effectiveModel === model.falModelImageToVideo && schema.properties && schema.properties.elements) {
+      const element = { frontal_image_url: refImages[0] };
+      if (refImages.length > 1) element.reference_image_urls = refImages.slice(1, 4);
+      input.elements = [element];
+      if (!/@Element1\b/.test(finalPrompt)) {
+        finalPrompt = `${finalPrompt}, featuring @Element1`;
+        input.prompt = finalPrompt;
+      }
+      appliedFeatures.identityElement = true;
     } else if (model.kind === "video") {
+      // Every other video model here only has a single subject-reference
+      // field (no fal endpoint in this app's registry takes a *list* of
+      // reference photos outside of Kling's elements above), so only the
+      // first photo is used — the rest are silently unused rather than
+      // erroring, same as any other "model doesn't support this" case.
       const field = firstSupportedField(schema, candidates.referenceImage || []);
       if (field) {
-        input[field] = referenceImage;
+        input[field] = refImages[0];
         appliedFeatures.referenceImage = true;
       } else {
         appliedFeatures.referenceImage = false;
