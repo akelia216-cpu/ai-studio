@@ -3,7 +3,7 @@
 // the latest file actually made it to production — that mismatch has been
 // the root cause of more than one "the fix didn't work" report in this
 // project's history.
-const APP_BUILD = "2026-08-23-aspect-ratio-enum-1";
+const APP_BUILD = "2026-08-23-show-endpoint-1";
 console.log(`[AI Studio] app.js build ${APP_BUILD} loaded`);
 
 // Timestamped console breadcrumb for the sound-effect/stitch pipeline
@@ -694,6 +694,7 @@ function renderGallery() {
     body.innerHTML = `
       <p class="card-prompt">${escapeHtml(item.prompt || item.label || "")}</p>
       <div class="card-meta"><span>${(MODELS[item.modelId] && MODELS[item.modelId].label) || item.label || ""}</span><span>${item.aspectRatio || ""}</span></div>
+      ${item.usedModel ? `<div class="card-endpoint">ran on: ${escapeHtml(item.usedModel)}</div>` : ""}
     `;
 
     card.appendChild(media);
@@ -976,6 +977,11 @@ async function generateImageOrVideo() {
     kind: MODELS[modelId].kind,
     status: data.status === "succeeded" ? "succeeded" : "processing",
     url: data.status === "succeeded" ? (Array.isArray(data.output) ? data.output[0] : data.output) : null,
+    // Attaching a reference photo can reroute the request to an editing
+    // endpoint that isn't the model named in the dropdown, so record which
+    // one actually ran — otherwise a failure looks like it came from a model
+    // that was never called.
+    usedModel: data.usedModel || null,
   };
   upsertHistoryItem(placeholder);
 
@@ -984,6 +990,9 @@ async function generateImageOrVideo() {
     if (data.appliedFeatures.startImage === false) notes.push("start/source image wasn't supported by this model, so it was ignored");
     if (data.appliedFeatures.endImage === false) notes.push("end frame wasn't supported by this model, so it was ignored");
     if (data.appliedFeatures.referenceImage === false) notes.push("reference photo wasn't supported by this model, so it was ignored");
+    if (data.appliedFeatures.editModelUsed) notes.push(`reference photo(s) attached, so this ran on the editing endpoint ${data.appliedFeatures.editModelUsed}`);
+    const sub = data.appliedFeatures.aspectRatioSubstituted;
+    if (sub) notes.push(`this model doesn't offer ${sub.requested}, so the closest ratio it does offer (${sub.used}) was used`);
   }
 
   let finalUrl = placeholder.url;
