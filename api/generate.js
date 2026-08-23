@@ -1,5 +1,5 @@
-const { MODELS, CAMERA_PRESETS, ACTION_PRESETS, UGC_IMAGE_EDIT_MODEL, UGC_IMAGE_EDIT_MULTI_MODEL, UGC_STYLE_CLAUSES, ASPECT_TO_IMAGE_SIZE } = require("./_models");
-const { getInputSchema, firstSupportedField, createPrediction } = require("./_fal");
+const { MODELS, CAMERA_PRESETS, ACTION_PRESETS, UGC_IMAGE_EDIT_MODEL, UGC_IMAGE_EDIT_MULTI_MODEL, UGC_STYLE_CLAUSES, ASPECT_TO_IMAGE_SIZE, pickClosestRatio } = require("./_models");
+const { getInputSchema, firstSupportedField, enumValuesForField, createPrediction } = require("./_fal");
 
 // (Brush-based inpainting used to be folded into this file as an "action:
 // inpaint" branch to save a serverless-function slot on Vercel's Hobby
@@ -71,10 +71,7 @@ module.exports = async function handler(req, res) {
   // For a styled image with one or more reference/product/character photos,
   // switch to an image-editing model that can keep those photos' subject(s)
   // recognizable instead of the plain text-to-image model the user picked.
-  // More than one reference photo needs a genuinely different endpoint, not
-  // just an extra field on the same one (fal-ai/flux-pro/kontext takes a
-  // single image_url; its /multi sibling takes an image_urls array) — see
-  // _models.js's comment on UGC_IMAGE_EDIT_MULTI_MODEL.
+  //
   // A model that ships its own editing endpoint uses that one, so picking a
   // model in the dropdown actually means something even when reference photos
   // are attached. Only models without one fall back to the flux/kontext pair
@@ -82,6 +79,12 @@ module.exports = async function handler(req, res) {
   // kontext models hard-blocks photorealistic prompts describing a real
   // person and silently returns a solid black image, so always rerouting to
   // kontext made those requests fail no matter which model was selected.
+  //
+  // Among the kontext fallbacks, more than one reference photo needs a
+  // genuinely different endpoint rather than an extra field on the same one
+  // (fal-ai/flux-pro/kontext takes a single image_url; its /multi sibling
+  // takes an image_urls array) — see _models.js's comment on
+  // UGC_IMAGE_EDIT_MULTI_MODEL.
   let effectiveModel = model.falModel;
   let usingEditModel = false;
   if (hasStyle && model.kind === "image" && refImages.length > 0) {
@@ -133,9 +136,22 @@ module.exports = async function handler(req, res) {
     const ratioField = firstSupportedField(schema, candidates.aspectRatio || ["aspect_ratio"]);
     const sizeField = firstSupportedField(schema, candidates.imageSize || ["image_size"]);
     if (ratioField) {
-      input[ratioField] = aspectRatio;
-    } else if (sizeField && ASPECT_TO_IMAGE_SIZE[aspectRatio]) {
-      input[sizeField] = ASPECT_TO_IMAGE_SIZE[aspectRatio];
+      // Having the field doesn't mean accepting every value for it — most of
+      // these models declare a fixed enum, and they differ. Send the closest
+      // ratio the model actually allows rather than the raw request, which
+      // 422s on any model whose list is missing it (Flux 2 Pro has no 4:5).
+      const allowed = enumValuesForField(schema, ratioField);
+      const resolved = pickClosestRatio(aspectRatio, allowed);
+      if (resolved) {
+        input[ratioField] = resolved;
+        if (resolved !== aspectRatio) appliedFeatures.aspectRatioSubstituted = { requested: aspectRatio, used: resolved };
+      }
+    } else if (sizeField) {
+      const allowed = enumValuesForField(schema, sizeField);
+      const named = ASPECT_TO_IMAGE_SIZE[aspectRatio];
+      // Same idea for the named-size field: only send a preset the model
+      // lists (when it lists any at all).
+      if (named && (!allowed || allowed.includes(named))) input[sizeField] = named;
     }
   }
 
