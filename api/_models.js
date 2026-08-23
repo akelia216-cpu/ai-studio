@@ -324,6 +324,17 @@ const MODELS = {
 
 // Preset -> fal.ai `image_size` enum, used for models whose schema exposes
 // image_size (a named preset) instead of a plain aspect_ratio string.
+// "4:5" (added 2026-08, index.html's aspect-ratio picker) has no entry here
+// on purpose: fal's standard image_size enum has no 4:5-equivalent preset
+// (its closest portrait option, portrait_4_3, is a visibly different
+// ratio), so mapping it to anything here would silently produce the wrong
+// shape. For an image_size-only model, generate.js's existing "if
+// (ratioField) {...} else if (sizeField && ASPECT_TO_IMAGE_SIZE[aspectRatio])
+// {...}" just leaves the size field unset when there's no entry — same
+// graceful "this option isn't supported by this model" behavior the app
+// already has elsewhere, rather than a wrong-but-silent result. Models with
+// a plain aspect_ratio string field (most of them) accept "4:5" directly
+// and need no entry here at all.
 const ASPECT_TO_IMAGE_SIZE = {
   "1:1": "square_hd",
   "16:9": "landscape_16_9",
