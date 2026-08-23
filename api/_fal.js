@@ -277,6 +277,25 @@ async function getPrediction(token, compositeId) {
     };
   }
 
+  // Some fal models (the flux/BFL family especially) report a moderation
+  // block by returning a perfectly normal "COMPLETED" status whose image is
+  // a blank placeholder — in practice a solid black PNG — with the only real
+  // signal being a has_nsfw_concepts flag alongside it. Handing that URL back
+  // as a success is what made a blocked generation look like a broken app.
+  // Treat the flag as the failure it actually is, so the UI shows a real
+  // reason instead of a black square.
+  if (Array.isArray(resultData?.has_nsfw_concepts) && resultData.has_nsfw_concepts.some(Boolean)) {
+    return {
+      ok: true,
+      status: 200,
+      data: {
+        status: "failed",
+        error:
+          "The model's content filter blocked this one and returned a blank image instead. This is the provider's own filter, not a setting in this app — it fires most often on photorealistic prompts describing a real person's body, clothing or pose. Try a different model, or soften the wording of the prompt.",
+      },
+    };
+  }
+
   return { ok: true, status: 200, data: { status: "succeeded", output: extractOutput(resultData) } };
 }
 
