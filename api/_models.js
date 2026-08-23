@@ -349,7 +349,53 @@ const ASPECT_TO_IMAGE_SIZE = {
   "1:1": "square_hd",
   "16:9": "landscape_16_9",
   "9:16": "portrait_16_9",
+  // fal's named-size enum has no exact 4:5 preset, so this points at the
+  // closest one it does have (portrait_4_3 is 0.75 against 4:5's 0.80 —
+  // nearer than any other option). Leaving it unmapped meant a 4:5 request
+  // silently fell through to the model's own default, which is usually
+  // landscape — the opposite of what was asked for.
+  "4:5": "portrait_4_3",
 };
+
+// Parses "w:h" into a numeric ratio. Returns null for anything unparseable.
+function parseAspectRatio(value) {
+  const match = /^\s*(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)\s*$/.exec(String(value || ""));
+  if (!match) return null;
+  const w = Number(match[1]);
+  const h = Number(match[2]);
+  if (!w || !h) return null;
+  return w / h;
+}
+
+// Given a requested ratio and the list a model actually accepts, returns the
+// exact match when there is one, otherwise the closest available ratio.
+//
+// Models disagree about which aspect ratios exist — Flux 2 Pro's enum, for
+// instance, runs 21:9 / 16:9 / 4:3 / 3:2 / 1:1 / 2:3 / 3:4 / 9:16 / 9:21 and
+// rejects 4:5 outright with a 422. Substituting the nearest shape (4:5 lands
+// on 3:4 there) keeps a request working on every model instead of failing on
+// the ones with a narrower list, which is far better than surfacing a raw
+// validation error for a ratio the user legitimately picked from our own UI.
+function pickClosestRatio(requested, allowed) {
+  if (!Array.isArray(allowed) || allowed.length === 0) return requested;
+  if (allowed.includes(requested)) return requested;
+
+  const target = parseAspectRatio(requested);
+  if (target === null) return null;
+
+  let best = null;
+  let bestDistance = Infinity;
+  for (const option of allowed) {
+    const value = parseAspectRatio(option);
+    if (value === null) continue;
+    const distance = Math.abs(Math.log(value / target)); // log-space, so 2:1 and 1:2 are equally far from 1:1
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = option;
+    }
+  }
+  return best;
+}
 
 // Model used to edit/compose an existing image (e.g. a product photo, or a
 // cartoon character's reference image) into a new scene, keeping its
@@ -425,4 +471,5 @@ module.exports = {
   UGC_IMAGE_EDIT_MULTI_MODEL,
   UGC_STYLE_CLAUSES,
   ASPECT_TO_IMAGE_SIZE,
+  pickClosestRatio,
 };
