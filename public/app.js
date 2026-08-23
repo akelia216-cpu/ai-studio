@@ -3,7 +3,7 @@
 // the latest file actually made it to production — that mismatch has been
 // the root cause of more than one "the fix didn't work" report in this
 // project's history.
-const APP_BUILD = "2026-08-01-4x5-aspect-ratio-1";
+const APP_BUILD = "2026-08-01-gemini-3.1-image-1";
 console.log(`[AI Studio] app.js build ${APP_BUILD} loaded`);
 
 // Timestamped console breadcrumb for the sound-effect/stitch pipeline
@@ -28,6 +28,7 @@ const MODELS = {
   "flux-2-pro": { label: "Flux 2 Pro (newest)", kind: "image" },
   sdxl: { label: "Stable Diffusion XL", kind: "image" },
   "seedream-v4": { label: "Bytedance Seedream v4 (newer)", kind: "image" },
+  "gemini-3.1-flash-image": { label: "Google Gemini 3.1 Flash Image (newest)", kind: "image" },
   "minimax-video-01": { label: "Minimax Video-01", kind: "video" },
   "minimax-hailuo-02-standard": { label: "Minimax Hailuo-02 Standard (newer)", kind: "video" },
   "minimax-hailuo-02-pro": { label: "Minimax Hailuo-02 Pro (newer, higher quality)", kind: "video" },
