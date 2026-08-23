@@ -80,6 +80,41 @@ function firstSupportedField(schema, candidates) {
   return null;
 }
 
+// Returns the list of allowed values for a field that declares one, or null
+// if the field is free-form (or absent). Needed because "the model has an
+// aspect_ratio field" is not the same as "the model accepts this particular
+// aspect ratio" — Flux 2 Pro, for one, has the field but rejects 4:5 with a
+// hard 422, which is exactly how a perfectly valid-looking request ends up
+// failing. Enums show up in a few shapes across fal's schemas (declared
+// inline, behind a $ref, or wrapped in an anyOf alongside a null type), so
+// all three are unwrapped here.
+function enumValuesForField(schemaEntry, fieldName) {
+  if (!schemaEntry || !schemaEntry.properties) return null;
+  let propSchema = schemaEntry.properties[fieldName];
+  if (!propSchema) return null;
+  if (propSchema.$ref && schemaEntry.doc) propSchema = resolveRef(schemaEntry.doc, propSchema.$ref);
+  if (!propSchema) return null;
+
+  const fromNode = (node) => {
+    if (!node) return null;
+    if (Array.isArray(node.enum) && node.enum.length) return node.enum;
+    return null;
+  };
+
+  const direct = fromNode(propSchema);
+  if (direct) return direct;
+
+  for (const key of ["anyOf", "oneOf", "allOf"]) {
+    if (!Array.isArray(propSchema[key])) continue;
+    for (let branch of propSchema[key]) {
+      if (branch && branch.$ref && schemaEntry.doc) branch = resolveRef(schemaEntry.doc, branch.$ref);
+      const found = fromNode(branch);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 // Resolves a top-level property's own sub-schema (following its $ref, if
 // any) using the raw doc a getInputSchema() result carries alongside its
 // flattened properties/required. Returns null if the property doesn't
@@ -334,4 +369,4 @@ function stringifyError(err) {
   return String(err);
 }
 
-module.exports = { getInputSchema, firstSupportedField, resolveNestedProperty, createPrediction, getPrediction };
+module.exports = { getInputSchema, firstSupportedField, enumValuesForField, resolveNestedProperty, createPrediction, getPrediction };
