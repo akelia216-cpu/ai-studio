@@ -84,6 +84,25 @@ const MODELS = {
       negativePrompt: ["negative_prompt"],
     },
   },
+  // Added 2026-08 — Google's Gemini image model, confirmed live via fal's
+  // own docs. Schema differs from the Flux/Seedream entries above in one
+  // real way worth noting: no negative_prompt field exists at all (not just
+  // absent from this candidates list — fal's own schema doesn't declare
+  // one), so that candidate is left out entirely rather than listed and
+  // silently ignored; aspect_ratio is a plain enum (21 ratios, including
+  // 4:5) rather than requiring the image_size fallback. Not yet
+  // live-tested against a real generation (fal balance was at zero at the
+  // time this was added).
+  "gemini-3.1-flash-image": {
+    label: "Google Gemini 3.1 Flash Image (newest)",
+    kind: "image",
+    falModel: "fal-ai/gemini-3.1-flash-image-preview",
+    defaults: {},
+    candidates: {
+      aspectRatio: ["aspect_ratio"],
+      seed: ["seed"],
+    },
+  },
 
   // ---- Video ----
   "minimax-video-01": {
