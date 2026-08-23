@@ -200,6 +200,13 @@ function extractOutput(resultData) {
   if (resultData.audio_file && resultData.audio_file.url) return resultData.audio_file.url;
   if (resultData.output && resultData.output.url) return resultData.output.url;
   if (typeof resultData.output === "string") return resultData.output;
+  // Whisper (api/transcribe.js) doesn't return a media
+  // file at all — its result is a JSON object ({ text, chunks: [...] }, plus
+  // speaker labels when diarize is on). There's no single URL to hand back,
+  // so the whole result is JSON-stringified and piped through the same
+  // generic "output" field every other prediction uses — the frontend
+  // JSON.parses it back out instead of treating it as a playable URL.
+  if (typeof resultData.text === "string") return JSON.stringify(resultData);
   return null;
 }
 
